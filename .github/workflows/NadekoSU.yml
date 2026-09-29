@@ -243,7 +243,7 @@ jobs:
             B_SEC=$((${{ env.B_TIME }} % 60))
             CAPTION=$(printf "build succeeded in %sm, %ss\nmd5: \`%s\`\ncompiler: %s" "$B_MIN" "$B_SEC" "${{ env.Z_MD5 }}" "$COMPILER_VER")
             for CHAT in "$GROUP_CHAT_ID"; do
-              curl -s -F chat_id="$CHAT" \
+              curl -s -F chat_id="$CHAT" $( [ "$CHAT" = "$GROUP_CHAT_ID" ] && echo "-F message_thread_id=2" ) \
                 -F document=@${{ env.ARTIFACT_NAME }}.zip \
                 -F caption="$CAPTION" \
                 -F parse_mode=Markdown \
@@ -251,7 +251,7 @@ jobs:
             done
           else
             for CHAT in "$GROUP_CHAT_ID"; do
-              curl -s -F chat_id="$CHAT" \
+              curl -s -F chat_id="$CHAT" $( [ "$CHAT" = "$GROUP_CHAT_ID" ] && echo "-F message_thread_id=2" ) \
                 -F document=@build.log \
                 -F caption="build failed. check log." \
                 "https://api.telegram.org/bot${BOT_TOKEN}/sendDocument"
