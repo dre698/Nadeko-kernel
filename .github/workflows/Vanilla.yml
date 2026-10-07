@@ -8,7 +8,7 @@ on:
 
 env:
   TZ: "Asia/Jakarta"
-  KERNEL_DEFCONFIG: "blossom_noksu_defconfig"
+  KERNEL_DEFCONFIG: "blossom_test_defconfig"
   KERNEL_ARCH: "arm64"
   KBUILD_BUILD_USER: "Telegram"
   KBUILD_BUILD_HOST: "dre698"
