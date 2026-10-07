@@ -1,5 +1,4 @@
-# MTK Kernel Build (Vanilla, no KSU) - toolchain matched to kernel_builder-sashimi
-# Toolchain: shattered-Clang-15.0.7 + LLD + LLVM tools + LLVM_IAS=1
+# MTK Kernel Build (Vanilla, no KSU) - toolchain: shattered-Clang-15.0.7 + LLD + LLVM tools
 
 name: Build Nadeko Kernel Vanilla
 
@@ -46,7 +45,15 @@ jobs:
 
       - name: Verify toolchains
         run: |
-          /tmp/shattered/bin/clang --version
+          export PATH="/tmp/shattered/bin:/usr/bin:${PATH}"
+          for tool in clang ld.lld llvm-nm llvm-ar llvm-objcopy llvm-objdump llvm-readelf llvm-strip; do
+            if ! command -v "$tool" >/dev/null; then
+              echo "✗ $tool not found in /tmp/shattered/bin"
+              ls -lah /tmp/shattered/bin
+              exit 1
+            fi
+          done
+          clang --version
           ld.lld --version
           aarch64-linux-gnu-gcc --version
           arm-linux-gnueabi-gcc --version
