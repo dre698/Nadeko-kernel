@@ -1,0 +1,11 @@
+--- drivers/base/node.c
++++ drivers/base/node.c
+@@ -69,7 +69,7 @@ static ssize_t node_read_meminfo(struct device *dev,
+ 	struct sysinfo i;
+ 
+ 	si_meminfo_node(&i, nid);
+-	n = sysfs_emit(buf,
++	n = sprintf(buf,
+ 		       "Node %d MemTotal:       %8lu kB\n"
+ 		       "Node %d MemFree:        %8lu kB\n"
+ 		       "Node %d MemUsed:        %8lu kB\n"
