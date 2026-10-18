@@ -635,7 +635,6 @@ struct S_START_T {
  */
 static unsigned int g_regScen = 0xa5a5a5a5; /* remove later */
 
-
 static /*volatile*/ wait_queue_head_t P2WaitQueueHead_WaitDeque;
 static /*volatile*/ wait_queue_head_t P2WaitQueueHead_WaitFrame;
 static /*volatile*/ wait_queue_head_t P2WaitQueueHead_WaitFrameEQDforDQ;
@@ -738,10 +737,19 @@ int pr_detect_count;
 #define _ion_keep_max_   (64)/*32*/
 #include "ion_drv.h" /*g_ion_device*/
 static struct ion_client *pIon_client;
+#ifdef CONFIG_MTK_ENABLE_GMO
+struct ISP_ION_CACHE {
+	signed int IonCt[_dma_max_wr_*_ion_keep_max_];
+	signed int IonFd[_dma_max_wr_*_ion_keep_max_];
+	struct ion_handle *IonHnd[_dma_max_wr_*_ion_keep_max_];
+};
+static struct ISP_ION_CACHE *G_WRDMA_IonCache[2];
+#else
 static signed int G_WRDMA_IonCt[2][_dma_max_wr_*_ion_keep_max_] = { {0}, {0} };
 static signed int G_WRDMA_IonFd[2][_dma_max_wr_*_ion_keep_max_] = { {0}, {0} };
 static struct ion_handle *G_WRDMA_IonHnd[2][_dma_max_wr_*_ion_keep_max_]
 			= { {NULL}, {NULL} };
+#endif
 /* protect G_WRDMA_IonHnd & G_WRDMA_IonFd */
 static spinlock_t SpinLock_IonHnd[2][_dma_max_wr_];
 
@@ -758,6 +766,12 @@ static struct T_ION_TBL gION_TBL[ISP_DEV_NODE_NUM] = {
 	{ISP_DEV_NODE_NUM, NULL, NULL, NULL, NULL},
 	{ISP_DEV_NODE_NUM, NULL, NULL, NULL, NULL},
 	{ISP_DEV_NODE_NUM, NULL, NULL, NULL, NULL},
+#ifdef CONFIG_MTK_ENABLE_GMO
+	{ISP_CAM_A_IDX, NULL, NULL, NULL,
+	 (spinlock_t *)SpinLock_IonHnd[0]},
+	{ISP_CAM_B_IDX, NULL, NULL, NULL,
+	 (spinlock_t *)SpinLock_IonHnd[1]},
+#else
 	{ISP_CAM_A_IDX, (signed int *)G_WRDMA_IonCt[0],
 	 (signed int *)G_WRDMA_IonFd[0],
 	 (struct ion_handle **)G_WRDMA_IonHnd[0],
@@ -766,6 +780,7 @@ static struct T_ION_TBL gION_TBL[ISP_DEV_NODE_NUM] = {
 	 (signed int *)G_WRDMA_IonFd[1],
 	 (struct ion_handle **)G_WRDMA_IonHnd[1],
 	 (spinlock_t *)SpinLock_IonHnd[1]},
+#endif
 	{ISP_DEV_NODE_NUM, NULL, NULL, NULL, NULL},
 	{ISP_DEV_NODE_NUM, NULL, NULL, NULL, NULL},
 	{ISP_DEV_NODE_NUM, NULL, NULL, NULL, NULL},
@@ -950,7 +965,7 @@ struct ISP_INFO_STRUCT {
 	struct ISP_BUF_INFO_STRUCT			BufInfo;
 	struct ISP_TIME_LOG_STRUCT             TimeLog;
 	#if (TIMESTAMP_QUEUE_EN == 1)
-	struct ISP_TIMESTPQ_INFO_STRUCT        TstpQInfo[ISP_IRQ_TYPE_AMOUNT];
+	struct ISP_TIMESTPQ_INFO_STRUCT        TstpQInfo[CAM_AMOUNT];
 	#endif
 };
 
@@ -4416,7 +4431,8 @@ static signed int ISP_WriteReg(struct ISP_REG_IO_STRUCT *pRegIo)
 	/* unsigned char* pData = NULL; */
 	struct ISP_REG_STRUCT *pData = NULL;
 
-	if (pRegIo->Count > 0xFFFFFFFF) {
+	if (((pRegIo->Count * sizeof(struct ISP_REG_STRUCT)) > 0xFFFFF000) ||
+		(pRegIo->Count == 0)) {
 		pr_err("pRegIo->Count error");
 		Ret = -EFAULT;
 		goto EXIT;
@@ -4957,7 +4973,8 @@ static long ISP_REF_CNT_CTRL_FUNC(unsigned long Param)
 				ref_cnt_ctrl.ctrl, ref_cnt_ctrl.id);
 
 		/*  */
-		if (ref_cnt_ctrl.id < ISP_REF_CNT_ID_MAX) {
+		if (ref_cnt_ctrl.id < ISP_REF_CNT_ID_MAX &&
+		    ref_cnt_ctrl.id >= 0) {
 			/* //////////////////---add lock here */
 			spin_lock(&(IspInfo.SpinLockIspRef));
 			/* ////////////////// */
@@ -6061,7 +6078,7 @@ static signed int ISP_P2_BufQue_CTRL_FUNC(struct ISP_P2_BUFQUE_STRUCT param)
 				idx, param.property, param.processID,
 				param.callerID);
 				ret =  -EFAULT;
-			} else if (restTime == -512) {
+			} else if (restTime == -SIG_ERESTARTSYS) {
 				pr_err("be stopped, restime(%d)", restTime);
 				ret =  -EFAULT;
 				break;
@@ -6163,7 +6180,7 @@ static signed int ISP_P2_BufQue_CTRL_FUNC(struct ISP_P2_BUFQUE_STRUCT param)
 				param.callerID, idx);
 			ret =  -EFAULT;
 			return ret;
-		} else if (restTime == -512) {
+		} else if (restTime == -SIG_ERESTARTSYS) {
 			pr_err("be stopped, restime(%d)", restTime);
 			ret =  -EFAULT;
 			return ret;
@@ -6219,7 +6236,7 @@ static signed int ISP_P2_BufQue_CTRL_FUNC(struct ISP_P2_BUFQUE_STRUCT param)
 					param.processID, param.callerID);
 				ret =  -EFAULT;
 				break;
-			} else if (restTime == -512) {
+			} else if (restTime == -SIG_ERESTARTSYS) {
 				pr_err("be stopped, restime(%d)", restTime);
 				ret =  -EFAULT;
 				break;
@@ -6327,17 +6344,19 @@ static signed int ISP_REGISTER_IRQ_USERKEY(char *userName)
 static signed int ISP_MARK_IRQ(struct ISP_WAIT_IRQ_STRUCT *irqinfo)
 {
 	unsigned long flags;
-	int idx = my_get_pow_idx(irqinfo->EventInfo.Status);
+	unsigned int idx = my_get_pow_idx(irqinfo->EventInfo.Status);
 
 	unsigned long long  sec = 0;
 	unsigned long       usec = 0;
 
-	if (irqinfo->Type >= ISP_IRQ_TYPE_AMOUNT) {
+	if (irqinfo->Type >= ISP_IRQ_TYPE_AMOUNT ||
+	    irqinfo->Type < 0) {
 		pr_err("MARK_IRQ: type error(%d)", irqinfo->Type);
 		return -EFAULT;
 	}
 
-	if (irqinfo->EventInfo.St_type >= ISP_IRQ_ST_AMOUNT) {
+	if (irqinfo->EventInfo.St_type >= ISP_IRQ_ST_AMOUNT ||
+	    irqinfo->EventInfo.St_type < 0) {
 		pr_err("MARK_IRQ: st_type error(%d)",
 			irqinfo->EventInfo.St_type);
 		return -EFAULT;
@@ -6347,11 +6366,6 @@ static signed int ISP_MARK_IRQ(struct ISP_WAIT_IRQ_STRUCT *irqinfo)
 	    irqinfo->EventInfo.UserKey < 0) {
 		pr_err("MARK_IRQ: userkey error(%d)",
 			irqinfo->EventInfo.UserKey);
-		return -EFAULT;
-	}
-
-	if ((idx < 0) || (idx >= 32)) {
-		pr_info("[Error] %s : Invalid idx = %d",  __func__, idx);
 		return -EFAULT;
 	}
 
@@ -6598,7 +6612,7 @@ static signed int ISP_WaitIrq(struct ISP_WAIT_IRQ_STRUCT *WaitIrq)
 	signed int Ret = 0, Timeout = WaitIrq->EventInfo.Timeout;
 	unsigned long flags;
 	unsigned int irqStatus;
-	int idx;
+	unsigned int idx;
 	bool freeze_passbysigcnt = false;
 
 	if ((WaitIrq->Type >= ISP_IRQ_TYPE_AMOUNT) ||
@@ -6819,9 +6833,7 @@ static signed int ISP_WaitIrq(struct ISP_WAIT_IRQ_STRUCT *WaitIrq)
 	}
 
 	/* check if user is interrupted by system signal */
-	if ((Timeout != 0) && (!ISP_GetIRQState(WaitIrq->Type,
-	    WaitIrq->EventInfo.St_type, WaitIrq->EventInfo.UserKey,
-	    WaitIrq->EventInfo.Status))) {
+	if (Timeout == -SIG_ERESTARTSYS) {
 		pr_info("interrupted by system signal,return value(%d),irq Type/User/Sts(0x%x/%d/0x%x)\n",
 			Timeout, WaitIrq->Type, WaitIrq->EventInfo.UserKey,
 			WaitIrq->EventInfo.Status);
@@ -6905,11 +6917,6 @@ EXIT:
 				      [WaitIrq->EventInfo.St_type]
 				      [WaitIrq->EventInfo.UserKey]) {
 		idx = my_get_pow_idx(WaitIrq->EventInfo.Status);
-		if ((idx < 0) || (idx >= 32)) {
-			pr_info("[Error] : Invalid idx = %d", idx);
-			Ret = -EFAULT;
-			return Ret;
-		}
 		IspInfo.IrqInfo.MarkedFlag[WaitIrq->Type]
 					  [WaitIrq->EventInfo.St_type]
 					  [WaitIrq->EventInfo.UserKey] &=
@@ -6932,13 +6939,71 @@ EXIT:
 /******************************************************************************
  *
  *****************************************************************************/
+#ifdef CONFIG_MTK_ENABLE_GMO
+static int ISP_ion_alloc_cache(void)
+{
+	int i;
+
+	if (G_WRDMA_IonCache[0])
+		return 0;
+
+	for (i = 0; i < ARRAY_SIZE(G_WRDMA_IonCache); i++) {
+		G_WRDMA_IonCache[i] =
+			kvzalloc(sizeof(*G_WRDMA_IonCache[i]), GFP_KERNEL);
+		if (!G_WRDMA_IonCache[i])
+			goto err;
+	}
+
+	gION_TBL[ISP_CAM_A_IDX].pIonCt = G_WRDMA_IonCache[0]->IonCt;
+	gION_TBL[ISP_CAM_A_IDX].pIonFd = G_WRDMA_IonCache[0]->IonFd;
+	gION_TBL[ISP_CAM_A_IDX].pIonHnd = G_WRDMA_IonCache[0]->IonHnd;
+	gION_TBL[ISP_CAM_B_IDX].pIonCt = G_WRDMA_IonCache[1]->IonCt;
+	gION_TBL[ISP_CAM_B_IDX].pIonFd = G_WRDMA_IonCache[1]->IonFd;
+	gION_TBL[ISP_CAM_B_IDX].pIonHnd = G_WRDMA_IonCache[1]->IonHnd;
+	return 0;
+
+err:
+	while (--i >= 0) {
+		kvfree(G_WRDMA_IonCache[i]);
+		G_WRDMA_IonCache[i] = NULL;
+	}
+	return -ENOMEM;
+}
+
+static void ISP_ion_free_cache(void)
+{
+	int i;
+
+	gION_TBL[ISP_CAM_A_IDX].pIonCt = NULL;
+	gION_TBL[ISP_CAM_A_IDX].pIonFd = NULL;
+	gION_TBL[ISP_CAM_A_IDX].pIonHnd = NULL;
+	gION_TBL[ISP_CAM_B_IDX].pIonCt = NULL;
+	gION_TBL[ISP_CAM_B_IDX].pIonFd = NULL;
+	gION_TBL[ISP_CAM_B_IDX].pIonHnd = NULL;
+
+	for (i = 0; i < ARRAY_SIZE(G_WRDMA_IonCache); i++) {
+		kvfree(G_WRDMA_IonCache[i]);
+		G_WRDMA_IonCache[i] = NULL;
+	}
+}
+#endif
+
 static void ISP_ion_init(void)
 {
+#ifdef CONFIG_MTK_ENABLE_GMO
+	if (ISP_ion_alloc_cache()) {
+		pr_err("failed to allocate ion handle cache\n");
+		return;
+	}
+#endif
 	if (!pIon_client && g_ion_device)
 		pIon_client = ion_client_create(g_ion_device, "camera_isp");
 
 	if (!pIon_client) {
 		pr_err("invalid ion client!\n");
+#ifdef CONFIG_MTK_ENABLE_GMO
+		ISP_ion_free_cache();
+#endif
 		return;
 	}
 
@@ -6953,6 +7018,9 @@ static void ISP_ion_uninit(void)
 {
 	if (!pIon_client) {
 		pr_err("invalid ion client!\n");
+#ifdef CONFIG_MTK_ENABLE_GMO
+		ISP_ion_free_cache();
+#endif
 		return;
 	}
 
@@ -6962,6 +7030,9 @@ static void ISP_ion_uninit(void)
 	ion_client_destroy(pIon_client);
 
 	pIon_client = NULL;
+#ifdef CONFIG_MTK_ENABLE_GMO
+	ISP_ion_free_cache();
+#endif
 }
 
 /******************************************************************************
@@ -7022,6 +7093,9 @@ static void ISP_ion_free_handle_by_module(unsigned int module)
 	signed int nFd;
 	struct ion_handle *p_IonHnd;
 	struct T_ION_TBL *ptbl = &gION_TBL[module];
+
+	if (!ptbl->pIonFd)
+		return;
 
 	if (IspInfo.DebugMask & ISP_DBG_ION_CTRL)
 		pr_info("[ion_free_hd_by_module]%d\n", module);
@@ -12278,6 +12352,9 @@ static int32_t ISP_PushBufTimestamp(unsigned int module, unsigned int dma_id,
 static int32_t ISP_PopBufTimestamp(unsigned int module, unsigned int dma_id,
 			struct S_START_T *pTstp)
 {
+	if (module > ISP_IRQ_TYPE_INT_CAM_B_ST)
+		return -EFAULT;
+
 	switch (module) {
 	case ISP_IRQ_TYPE_INT_CAM_A_ST:
 	case ISP_IRQ_TYPE_INT_CAM_B_ST:
@@ -12339,6 +12416,9 @@ static int32_t ISP_WaitTimestampReady(unsigned int module, unsigned int dma_id)
 {
 	unsigned int _timeout = 0;
 	unsigned int wait_cnt = 0;
+
+	if (module > ISP_IRQ_TYPE_INT_CAM_B_ST || dma_id >= _cam_max_)
+		return -EFAULT;
 
 	if (IspInfo.TstpQInfo[module].Dmao[dma_id].TotalWrCnt >
 	    IspInfo.TstpQInfo[module].Dmao[dma_id].TotalRdCnt)

@@ -173,13 +173,14 @@ MTK_WCN_STP_SDIO_HIF_INFO *const gp_info = &g_stp_sdio_host_info;
 /* STP-SDIO probe count (not support multiple probe and hosts) */
 UINT32 g_stp_sdio_host_count;
 
+static struct timeval old = {0};
+#define TX_NO_ACK_TIMEOUT_ASSERT 5 /* tx no ack timeout assert, unit:second*/
+
 #if STP_SDIO_DBG_SUPPORT && STP_SDIO_RXDBG
 #define STP_SDIO_RXDBG_PROCNAME "driver/stp_sdio_rxdbg"
 static struct proc_dir_entry *gStpSdioRxDbgEntry;
 static INT32 stp_sdio_rxdbg_cnt;
 static struct stp_sdio_rxdbg stp_sdio_rxdbg_buffer[STP_SDIO_RXDBG_COUNT];
-static struct timeval old = {0};
-#define TX_NO_ACK_TIMEOUT_ASSERT 5 /* tx no ack timeout assert, unit:second*/
 
 static ssize_t stp_sdio_rxdbg_read(struct file *filp, char __user *buf, size_t count, loff_t *f_pos);
 static ssize_t stp_sdio_rxdbg_write(struct file *filp, const char __user *buf, size_t count,
@@ -1949,8 +1950,10 @@ static VOID stp_sdio_tx_wkr(struct work_struct *work)
 	UINT32 idx;
 	MTK_WCN_STP_SDIO_PKT_BUF *pb;
 	struct timeval now;
+#if STP_SDIO_DBG_SUPPORT && STP_SDIO_TXDBG
 	UINT64 ts;
 	ULONG nsec;
+#endif
 
 	p_info = container_of(work, MTK_WCN_STP_SDIO_HIF_INFO, tx_work);
 	ret = HIF_SDIO_ERR_SUCCESS;

@@ -786,7 +786,7 @@ static void DevicesWatchdogThread(void *pvData)
 					case DWT_SIG_TIMEOUT:
 						_DwtCheckHealthStatus(psPVRSRVData,
 						                      &ePreviousHealthStatus,
-						                      IMG_TRUE);
+						                      (POLL_FLAGS)IMG_TRUE);
 						/* self-transition */
 						break;
 					case DWT_SIG_UNLOAD:
@@ -818,7 +818,7 @@ static void DevicesWatchdogThread(void *pvData)
 						/* self-transition */
 						_DwtCheckHealthStatus(psPVRSRVData,
 						                      &ePreviousHealthStatus,
-						                      IMG_TRUE);
+						                      (POLL_FLAGS)IMG_TRUE);
 						break;
 					case DWT_SIG_UNLOAD:
 						eState = DWT_ST_FINAL;
@@ -2455,7 +2455,7 @@ PVRSRV_ERROR IMG_CALLCONV PVRSRVCommonDeviceDestroy(PVRSRV_DEVICE_NODE *psDevice
 			                              psSync->pui32LinAddr,
 			                              psDeviceNode->ui32NextMMUInvalidateUpdate-1,
 			                              0xFFFFFFFF,
-			                              IMG_TRUE);
+			                              (POLL_FLAGS)IMG_TRUE);
 			PVR_LOG_RETURN_IF_ERROR(eError, "PVRSRVPollForValueKM");
 
 			/* Important to set the device node pointer to NULL

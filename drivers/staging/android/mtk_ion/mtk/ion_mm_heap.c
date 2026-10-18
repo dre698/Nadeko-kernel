@@ -114,28 +114,23 @@ struct ion_system_heap {
 	struct ion_page_pool **cached_pools;
 };
 
-struct page_info {
-	struct page *page;
-	unsigned int order;
-	struct list_head list;
-};
-
 unsigned int caller_pid;
 unsigned int caller_tid;
 unsigned long long alloc_large_fail_ts;
 
 static struct page *alloc_buffer_page(struct ion_system_heap *heap,
 				      struct ion_buffer *buffer,
-				      unsigned long order)
+				      unsigned int order_idx)
 {
 	bool cached = ion_buffer_cached(buffer);
 	struct ion_page_pool *pool;
 	struct page *page;
+	unsigned int order = orders[order_idx];
 
 	if (!cached)
-		pool = heap->pools[order_to_index(order)];
+		pool = heap->pools[order_idx];
 	else
-		pool = heap->cached_pools[order_to_index(order)];
+		pool = heap->cached_pools[order_idx];
 
 	page = ion_page_pool_alloc(pool);
 
@@ -153,14 +148,12 @@ static void free_buffer_page(struct ion_system_heap *heap,
 {
 	bool cached = ion_buffer_cached(buffer);
 	int order_idx = order_to_index(order);
+	struct ion_page_pool *pool;
 	unsigned long private_flags = buffer->private_flags;
 
-	if (!cached && !(private_flags & ION_PRIV_FLAG_SHRINKER_FREE)) {
-		struct ion_page_pool *pool = heap->pools[order_idx];
-
-		ion_page_pool_free(pool, page);
-	} else if (cached && !(private_flags & ION_PRIV_FLAG_SHRINKER_FREE)) {
-		struct ion_page_pool *pool = heap->cached_pools[order_idx];
+	if (!(private_flags & ION_PRIV_FLAG_SHRINKER_FREE)) {
+		pool = cached ? heap->cached_pools[order_idx] :
+				heap->pools[order_idx];
 
 		ion_page_pool_free(pool, page);
 	} else {
@@ -174,20 +167,13 @@ static void free_buffer_page(struct ion_system_heap *heap,
 	}
 }
 
-static struct page_info *alloc_largest_available(struct ion_system_heap *heap,
-						 struct ion_buffer *buffer,
-						 unsigned long size,
-						 unsigned int max_order)
+static struct page *alloc_largest_available(struct ion_system_heap *heap,
+					    struct ion_buffer *buffer,
+					    unsigned long size,
+					    unsigned int max_order)
 {
 	struct page *page;
-	struct page_info *info;
 	int i;
-
-	info = kmalloc(sizeof(*info), GFP_KERNEL);
-	if (!info) {
-		IONMSG("%s kmalloc failed info is null.\n", __func__);
-		return NULL;
-	}
 
 	for (i = 0; i < num_orders; i++) {
 		if (size < order_to_size(orders[i]))
@@ -195,16 +181,12 @@ static struct page_info *alloc_largest_available(struct ion_system_heap *heap,
 		if (max_order < orders[i])
 			continue;
 
-		page = alloc_buffer_page(heap, buffer, orders[i]);
+		page = alloc_buffer_page(heap, buffer, i);
 		if (!page)
 			continue;
 
-		info->page = page;
-		info->order = orders[i];
-		INIT_LIST_HEAD(&info->list);
-		return info;
+		return page;
 	}
-	kfree(info);
 
 	return NULL;
 }
@@ -213,17 +195,11 @@ static int ion_mm_pool_total(struct ion_system_heap *heap,
 			     unsigned long order, bool cached)
 {
 	struct ion_page_pool *pool;
-	int count;
+	int order_idx = order_to_index(order);
 
-	if (!cached) {
-		pool = heap->pools[order_to_index(order)];
-		count = pool->low_count + pool->high_count;
-	} else {
-		pool = heap->cached_pools[order_to_index(order)];
-		count = (pool->low_count + pool->high_count);
-	}
+	pool = cached ? heap->cached_pools[order_idx] : heap->pools[order_idx];
 
-	return count;
+	return pool->low_count + pool->high_count;
 }
 
 #define MTK_GET_DOMAIN_IGNORE (DOMAIN_NUM + 1)
@@ -337,13 +313,16 @@ static int ion_mm_heap_allocate(struct ion_heap *heap,
 	struct scatterlist *sg;
 	int ret;
 	struct list_head pages;
-	struct page_info *info = NULL;
-	struct page_info *tmp_info = NULL;
+	struct page *page = NULL;
+	struct page *tmp_page = NULL;
 	int i = 0;
 	unsigned long size_remaining = PAGE_ALIGN(size);
 	unsigned int max_order = orders[0];
 	struct ion_mm_buffer_info *buffer_info = NULL;
-	unsigned long long start, end;
+	unsigned long long start;
+#if IS_ENABLED(CONFIG_MTK_ION_DEBUG)
+	unsigned long long end;
+#endif
 	unsigned long user_va = 0;
 #ifdef CONFIG_MTK_PSEUDO_M4U
 	struct page *page;
@@ -357,7 +336,7 @@ static int ion_mm_heap_allocate(struct ion_heap *heap,
 		return -EINVAL;
 	}
 
-	if (size / PAGE_SIZE > totalram_pages / 2) {
+	if (size / PAGE_SIZE > totalram_pages() / 2) {
 		IONMSG("%s size %lu is larger than totalram_pages.\n", __func__,
 		       size);
 		return -ENOMEM;
@@ -375,24 +354,29 @@ static int ion_mm_heap_allocate(struct ion_heap *heap,
 	caller_tid = (unsigned int)current->tgid;
 
 	while (size_remaining > 0) {
-		info = alloc_largest_available(sys_heap, buffer, size_remaining,
+		unsigned int order;
+
+		page = alloc_largest_available(sys_heap, buffer, size_remaining,
 					       max_order);
-		if (!info) {
-			IONMSG("%s alloc_largest_available failed info\n",
+		if (!page) {
+			IONMSG("%s alloc_largest_available failed page\n",
 			       __func__);
 			goto err;
 		}
-		list_add_tail(&info->list, &pages);
-		size_remaining -= (1 << info->order) * PAGE_SIZE;
-		max_order = info->order;
+		order = compound_order(page);
+		list_add_tail(&page->lru, &pages);
+		size_remaining -= PAGE_SIZE << order;
+		max_order = order;
 		i++;
 	}
+#if IS_ENABLED(CONFIG_MTK_ION_DEBUG)
 	end = sched_clock();
 
 	if (end - start > 10000000ULL) {	/* unit is ns, 10ms */
 		IONMSG(" %s warn: size: %lu time: %lld ns --%d\n",
 		       __func__, size, end - start, heap->id);
 	}
+#endif
 	table = kzalloc(sizeof(*table), GFP_KERNEL);
 	if (!table) {
 		IONMSG("%s kzalloc failed table is null.\n", __func__);
@@ -406,22 +390,21 @@ static int ion_mm_heap_allocate(struct ion_heap *heap,
 		goto err1;
 	}
 
-	sg = table->sgl;
-	list_for_each_entry_safe(info, tmp_info, &pages, list) {
-		struct page *page = info->page;
-
-		sg_set_page(sg, page, (1 << info->order) * PAGE_SIZE, 0);
-		sg_dma_len(sg) = sg->length;
-		sg = sg_next(sg);
-		list_del(&info->list);
-		kfree(info);
-	}
-
 	/* create MM buffer info for it */
 	buffer_info = kzalloc(sizeof(*buffer_info), GFP_KERNEL);
 	if (IS_ERR_OR_NULL(buffer_info)) {
 		IONMSG(" %s: Error. alloc ion_buffer failed.\n", __func__);
 		goto err1;
+	}
+
+	sg = table->sgl;
+	list_for_each_entry_safe(page, tmp_page, &pages, lru) {
+		unsigned int order = compound_order(page);
+
+		sg_set_page(sg, page, PAGE_SIZE << order, 0);
+		sg_dma_len(sg) = sg->length;
+		sg = sg_next(sg);
+		list_del(&page->lru);
 	}
 
 	buffer->sg_table = table;
@@ -457,10 +440,10 @@ err1:
 	IONMSG("error: alloc for sg_table fail\n");
 err:
 	if (!list_empty(&pages)) {
-		list_for_each_entry_safe(info, tmp_info, &pages, list) {
-			free_buffer_page(sys_heap, buffer, info->page,
-					 info->order);
-			kfree(info);
+		list_for_each_entry_safe(page, tmp_page, &pages, lru) {
+			list_del(&page->lru);
+			free_buffer_page(sys_heap, buffer, page,
+					 compound_order(page));
 		}
 	}
 	IONMSG("error: mm_alloc fail: size=%lu, flag=%lu.\n", size, flags);
@@ -1600,12 +1583,12 @@ struct ion_heap *ion_mm_heap_create(struct ion_platform_heap *unused)
 		if (unused->id == ION_HEAP_TYPE_MULTIMEDIA_FOR_CAMERA)
 			gfp_flags |= __GFP_HIGHMEM;
 
-		pool = ion_page_pool_create(gfp_flags, orders[i], false);
+		pool = ion_page_pool_create(gfp_flags, orders[i]);
 		if (!pool)
 			goto err_create_pool;
 		heap->pools[i] = pool;
 
-		pool = ion_page_pool_create(gfp_flags, orders[i], true);
+		pool = ion_page_pool_create(gfp_flags, orders[i]);
 		if (!pool)
 			goto err_create_pool;
 		heap->cached_pools[i] = pool;
@@ -2040,7 +2023,7 @@ long ion_mm_ioctl(struct ion_client *client, unsigned int cmd,
 
 			mutex_unlock(&buffer->lock);
 
-		} else if (buffer_type == ION_HEAP_TYPE_MULTIMEDIA_SEC) {
+		} else if ((enum mtk_ion_heap_type)buffer_type == ION_HEAP_TYPE_MULTIMEDIA_SEC) {
 			struct ion_heap *sec_heap;
 			ion_phys_addr_t phy_addr;
 			size_t len;
@@ -2188,7 +2171,8 @@ long ion_mm_ioctl(struct ion_client *client, unsigned int cmd,
 	case ION_MM_ACQ_CACHE_POOL:
 	{
 		ion_comm_event_notify(1, param.pool_info_param.len);
-		IONMSG("[ion_heap]: ION_MM_ACQ_CACHE_POOL-%d.\n", param.mm_cmd);
+		IONDBG("[ion_heap]: ION_MM_ACQ_CACHE_POOL-%d.\n",
+		       param.mm_cmd);
 	}
 	break;
 	case ION_MM_QRY_CACHE_POOL:
@@ -2202,7 +2186,7 @@ long ion_mm_ioctl(struct ion_client *client, unsigned int cmd,
 			ion_mm_heap_pool_size(ion_cam_heap,
 					      __GFP_HIGHMEM,
 					      true);
-		IONMSG("ION_MM_QRY_CACHE_POOL, heap 0x%p, id %d, ret: %d.\n",
+		IONDBG("ION_MM_QRY_CACHE_POOL, heap 0x%p, id %d, ret: %d.\n",
 		       ion_cam_heap, param.pool_info_param.heap_id_mask,
 		       param.pool_info_param.ret);
 	}
@@ -2233,39 +2217,40 @@ int ion_mm_heap_cache_allocate(struct ion_heap *heap,
 	struct scatterlist *sg;
 	int ret;
 	struct list_head pages;
-	struct page_info *info = NULL;
-	struct page_info *tmp_info = NULL;
+	struct page *page = NULL;
+	struct page *tmp_page = NULL;
 	int i = 0;
 	unsigned long size_remaining = PAGE_ALIGN(size);
-	unsigned int max_order = orders[0];
-	unsigned long long start, end;
+	unsigned int max_order = orders[1];
 
 	INIT_LIST_HEAD(&pages);
-	start = sched_clock();
 
-	/* add time interval to alloc 64k page in low memory status*/
-	if ((start - alloc_large_fail_ts) < 500000000)
-		max_order = orders[1];
+	/*
+	 * Cache prefill is speculative. Keep order-4 pages for real clients and
+	 * avoid forcing high-order allocation attempts from this idle worker.
+	 */
 
 	while (size_remaining > 0) {
-		info = alloc_largest_available(sys_heap, buffer,
+		unsigned int order;
+
+		page = alloc_largest_available(sys_heap, buffer,
 					       size_remaining,
 					       max_order);
-		if (!info) {
-			IONMSG("%s cache_alloc info failed.\n", __func__);
+		if (!page) {
+			IONMSG("%s cache_alloc page failed.\n", __func__);
 			break;
 		}
-		list_add_tail(&info->list, &pages);
-		size_remaining -= (1 << info->order) * PAGE_SIZE;
-		max_order = info->order;
+		order = compound_order(page);
+		list_add_tail(&page->lru, &pages);
+		size_remaining -= PAGE_SIZE << order;
+		max_order = order;
 		i++;
 	}
-	end = sched_clock();
 
-	if (!info) {
-		IONMSG("%s err info, size %ld, remain %ld.\n",
+	if (size_remaining) {
+		IONMSG("%s err page, size %ld, remain %ld.\n",
 		       __func__, size, size_remaining);
-		return -ENOMEM;
+		goto err;
 	}
 
 	table = kzalloc(sizeof(*table), GFP_KERNEL);
@@ -2281,14 +2266,13 @@ int ion_mm_heap_cache_allocate(struct ion_heap *heap,
 	}
 
 	sg = table->sgl;
-	list_for_each_entry_safe(info, tmp_info, &pages, list) {
-		struct page *page = info->page;
+	list_for_each_entry_safe(page, tmp_page, &pages, lru) {
+		unsigned int order = compound_order(page);
 
-		sg_set_page(sg, page, (1 << info->order) * PAGE_SIZE, 0);
+		sg_set_page(sg, page, PAGE_SIZE << order, 0);
 		sg_dma_len(sg) = sg->length;
 		sg = sg_next(sg);
-		list_del(&info->list);
-		kfree(info);
+		list_del(&page->lru);
 	}
 
 	buffer->sg_table = table;
@@ -2301,10 +2285,9 @@ err1:
 	kfree(table);
 	IONMSG("error: cache_alloc for sg_table fail\n");
 err:
-	list_for_each_entry_safe(info, tmp_info, &pages, list) {
-		free_buffer_page(sys_heap, buffer,
-				 info->page, info->order);
-		kfree(info);
+	list_for_each_entry_safe(page, tmp_page, &pages, lru) {
+		list_del(&page->lru);
+		free_buffer_page(sys_heap, buffer, page, compound_order(page));
 	}
 	IONMSG("mm_cache_alloc fail: size=%lu, flag=%lu.\n", size, flags);
 

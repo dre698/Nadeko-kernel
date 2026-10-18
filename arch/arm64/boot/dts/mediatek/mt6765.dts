@@ -26,10 +26,11 @@
 
 	/* chosen */
 	chosen: chosen {
-		bootargs = "console=tty0 console=ttyS0,921600n1 vmalloc=400M \
-page_owner=on \
+		bootargs = "vmalloc=400M \
+quiet nodebugmon \
 swiotlb=noforce androidboot.hardware=mt6765 \
 maxcpus=8 \
+pstore.update_ms=1000 \
 firmware_class.path=/vendor/firmware";
 		kaslr-seed = <0 0>;
 	};
@@ -47,8 +48,8 @@ firmware_class.path=/vendor/firmware";
 		compatible = "operating-points-v2";
 		opp-shared;
 		opp0 {
-			opp-hz = /bits/ 64 <900000000>;
-			opp-microvolt = <600000>;
+			opp-hz = /bits/ 64 <400000000>;
+			opp-microvolt = <500000>;
 		};
 		opp1 {
 			opp-hz = /bits/ 64 <979000000>;
@@ -104,11 +105,11 @@ firmware_class.path=/vendor/firmware";
 		};
 		opp14 {
 			opp-hz = /bits/ 64 <2215000000>;
-			opp-microvolt = <1068750>;
+			opp-microvolt = <1025000>;
 		};
 		opp15 {
-			opp-hz = /bits/ 64 <2301000000>;
-			opp-microvolt = <1118750>;
+			opp-hz = /bits/ 64 <2401000000>;
+			opp-microvolt = <1068750>;
 		};
 	};
 
@@ -116,40 +117,40 @@ firmware_class.path=/vendor/firmware";
 		compatible = "operating-points-v2";
 		opp-shared;
 		opp0 {
-			opp-hz = /bits/ 64 <400000000>;
-			opp-microvolt = <600000>;
+			opp-hz = /bits/ 64 <300000000>;
+			opp-microvolt = <500000>;
 		};
 		opp1 {
 			opp-hz = /bits/ 64 <501000000>;
-			opp-microvolt = <631250>;
+			opp-microvolt = <600000>;
 		};
 		opp2 {
 			opp-hz = /bits/ 64 <542000000>;
-			opp-microvolt = <643750>;
+			opp-microvolt = <631250>;
 		};
 		opp3 {
 			opp-hz = /bits/ 64 <643000000>;
-			opp-microvolt = <675000>;
+			opp-microvolt = <643750>;
 		};
 		opp4 {
 			opp-hz = /bits/ 64 <745000000>;
-			opp-microvolt = <706250>;
+			opp-microvolt = <675000>;
 		};
 		opp5 {
 			opp-hz = /bits/ 64 <846000000>;
-			opp-microvolt = <737500>;
+			opp-microvolt = <706250>;
 		};
 		opp6 {
 			opp-hz = /bits/ 64 <948000000>;
-			opp-microvolt = <768750>;
+			opp-microvolt = <737500>;
 		};
 		opp7 {
 			opp-hz = /bits/ 64 <1050000000>;
-			opp-microvolt = <800000>;
+			opp-microvolt = <768750>;
 		};
 		opp8 {
 			opp-hz = /bits/ 64 <1138000000>;
-			opp-microvolt = <837500>;
+			opp-microvolt = <825000>;
 		};
 		opp9 {
 			opp-hz = /bits/ 64 <1226000000>;
@@ -169,15 +170,15 @@ firmware_class.path=/vendor/firmware";
 		};
 		opp13 {
 			opp-hz = /bits/ 64 <1579000000>;
-			opp-microvolt = <1025000>;
+			opp-microvolt = <987500>;
 		};
 		opp14 {
 			opp-hz = /bits/ 64 <1682000000>;
-			opp-microvolt = <1068740>;
+			opp-microvolt = <987500>;
 		};
 		opp15 {
 			opp-hz = /bits/ 64 <1800000000>;
-			opp-microvolt = <1118750>;
+			opp-microvolt = <1025000>;
 		};
 	};
 
@@ -185,8 +186,8 @@ firmware_class.path=/vendor/firmware";
 		compatible = "operating-points-v2";
 		opp-shared;
 		opp00 {
-			opp-hz = /bits/ 64 <300000000>;
-			opp-microvolt = <600000>;
+			opp-hz = /bits/ 64 <150000000>;
+			opp-microvolt = <500000>;
 		};
 		opp01 {
 			opp-hz = /bits/ 64 <339000000>;
@@ -217,19 +218,19 @@ firmware_class.path=/vendor/firmware";
 			opp-microvolt = <800000>;
 		};
 		opp08 {
-			opp-hz = /bits/ 64 <76300000>;
-			opp-microvolt = <837500>;
+			opp-hz = /bits/ 64 <763000000>;
+			opp-microvolt = <825000>;
 		};
 		opp09 {
-			opp-hz = /bits/ 64 <80100000>;
+			opp-hz = /bits/ 64 <801000000>;
 			opp-microvolt = <875000>;
 		};
 		opp10 {
-			opp-hz = /bits/ 64 <84000000>;
+			opp-hz = /bits/ 64 <840000000>;
 			opp-microvolt = <912500>;
 		};
 		opp11 {
-			opp-hz = /bits/ 64 <87800000>;
+			opp-hz = /bits/ 64 <878000000>;
 			opp-microvolt = <950000>;
 		};
 		opp12 {
@@ -238,15 +239,15 @@ firmware_class.path=/vendor/firmware";
 		};
 		opp13 {
 			opp-hz = /bits/ 64 <955000000>;
-			opp-microvolt = <1025000>;
+			opp-microvolt = <987500>;
 		};
 		opp14 {
 			opp-hz = /bits/ 64 <1000000000>;
-			opp-microvolt = <1068750>;
+			opp-microvolt = <1025000>;
 		};
 		opp15 {
 			opp-hz = /bits/ 64 <1051000000>;
-			opp-microvolt = <1118750>;
+			opp-microvolt = <1068750>;
 		};
 	};
 
@@ -267,7 +268,7 @@ firmware_class.path=/vendor/firmware";
 			compatible = "arm,cortex-a53";
 			reg = <0x000>;
 			enable-method = "psci";
-			clock-frequency = <2301000000>;
+			clock-frequency = <2401000000>;
 			operating-points-v2 = <&cluster0_opp>;
 			dynamic-power-coefficient = <275>;
 			capacity-dmips-mhz = <1024>;
@@ -280,7 +281,7 @@ firmware_class.path=/vendor/firmware";
 			compatible = "arm,cortex-a53";
 			reg = <0x001>;
 			enable-method = "psci";
-			clock-frequency = <2301000000>;
+			clock-frequency = <2401000000>;
 			operating-points-v2 = <&cluster0_opp>;
 			dynamic-power-coefficient = <275>;
 			capacity-dmips-mhz = <1024>;
@@ -293,7 +294,7 @@ firmware_class.path=/vendor/firmware";
 			compatible = "arm,cortex-a53";
 			reg = <0x002>;
 			enable-method = "psci";
-			clock-frequency = <2301000000>;
+			clock-frequency = <2401000000>;
 			operating-points-v2 = <&cluster0_opp>;
 			dynamic-power-coefficient = <275>;
 			capacity-dmips-mhz = <1024>;
@@ -306,7 +307,7 @@ firmware_class.path=/vendor/firmware";
 			compatible = "arm,cortex-a53";
 			reg = <0x003>;
 			enable-method = "psci";
-			clock-frequency = <2301000000>;
+			clock-frequency = <2401000000>;
 			operating-points-v2 = <&cluster0_opp>;
 			dynamic-power-coefficient = <275>;
 			capacity-dmips-mhz = <1024>;
@@ -486,6 +487,16 @@ firmware_class.path=/vendor/firmware";
 		#size-cells = <2>;
 		ranges;
 
+		ramoops_mem: ramoops@b0000000 {
+			compatible = "ramoops";
+			reg = <0 0xb0000000 0 0x00400000>;
+			record-size = <0x00040000>;
+			console-size = <0x00100000>;
+			pmsg-size = <0x00100000>;
+			unbuffered;
+			no-map;
+		};
+
 		reserve-memory-sspm_share {
 			compatible = "mediatek,reserve-memory-sspm_share";
 			no-map;
@@ -498,7 +509,11 @@ firmware_class.path=/vendor/firmware";
 		reserve-memory-scp_share {
 			compatible = "mediatek,reserve-memory-scp_share";
 			no-map;
+		#ifdef CONFIG_MTK_ENABLE_GMO
+			size = <0 0x00100000>;
+		#else
 			size = <0 0x00300000>;
+		#endif
 			alignment = <0 0x1000000>;
 			alloc-ranges = <0 0x40000000 0 0x50000000>;
 		};
@@ -957,8 +972,11 @@ firmware_class.path=/vendor/firmware";
 				  <9 10>;   /* vow dump */
 
 		scp_mem_key = "mediatek,reserve-memory-scp_share";
-		scp_mem_tbl = <1 0x100000>, /* sensor */
-			      <4 0x200000>; /* logger */
+		scp_mem_tbl = <1 0x100000> /* sensor */
+		#ifndef CONFIG_MTK_ENABLE_GMO
+			      , <4 0x200000> /* logger */
+		#endif
+			      ;
 	};
 
 	scp_dvfs {
@@ -2717,7 +2735,7 @@ firmware_class.path=/vendor/firmware";
 		reg = <0 0x13000000 0 0x80000>;
 		interrupts = <GIC_SPI 259 IRQ_TYPE_LEVEL_LOW>;
 		interrupt-names = "RGX";
-		clock-frequency = <570000000>;
+		clock-frequency = <850000000>;
 		ged-supply = <&ged>;
 	};
 

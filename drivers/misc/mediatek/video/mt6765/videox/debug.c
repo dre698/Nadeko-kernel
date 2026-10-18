@@ -115,10 +115,9 @@ struct layer_statistic {
 	unsigned long cnt_by_layers_with_ext[STATISTIC_MAX_LAYERS];
 	unsigned long cnt_by_layers_with_arm_ext[STATISTIC_MAX_LAYERS];
 };
-static struct layer_statistic layer_stat;
 static int layer_statistic_enable;
 
-static int _is_overlap(unsigned int x1, unsigned int y1,
+static int __maybe_unused _is_overlap(unsigned int x1, unsigned int y1,
 	unsigned int w1, unsigned int h1, unsigned int x2,
 	unsigned int y2, unsigned int w2, unsigned int h2)
 {
@@ -127,87 +126,6 @@ static int _is_overlap(unsigned int x1, unsigned int y1,
 	if (y2 >= y1 + h1 || y1 >= y2 + h2)
 		return 0;
 	return 1;
-}
-
-static int layer_is_overlap(struct disp_frame_cfg_t *cfg,
-	int idx, int from, int to)
-{
-	int i;
-
-	for (i = from; i <= to; i++) {
-		if (_is_overlap(cfg->input_cfg[idx].tgt_offset_x,
-			cfg->input_cfg[idx].tgt_offset_y,
-			cfg->input_cfg[idx].src_width,
-			cfg->input_cfg[idx].src_height,
-			cfg->input_cfg[i].tgt_offset_x,
-			cfg->input_cfg[i].tgt_offset_y,
-			cfg->input_cfg[i].src_width,
-			cfg->input_cfg[i].src_height))
-			return 1;
-	}
-	return 0;
-}
-
-
-static int calc_layer_num_with_arm_ext(struct disp_frame_cfg_t *cfg)
-{
-	int ovl_phy_num[2] = {4, 2};
-	int ovl_ext_num[2] = {3, 3};
-	int ovl_idx = 0;
-	int i, cur_phy_num, cur_ext_num;
-	int cur_phy_idx_in_cfg;
-	int total_phy_layer = 0;
-
-	cur_phy_num = 0;
-	cur_ext_num = 0;
-	cur_phy_idx_in_cfg = 0;
-	for (i = 0; i < cfg->input_layer_num; i++) {
-		int is_overlap;
-
-		if (!cfg->input_cfg[i].layer_enable)
-			continue;
-
-		if (cur_phy_num && cur_ext_num < ovl_ext_num[ovl_idx])
-			is_overlap = layer_is_overlap(cfg, i,
-				cur_phy_idx_in_cfg, i - 1);
-		else
-			is_overlap = 1;
-
-		if (!is_overlap) {
-			/* put it in ext layer */
-			cur_ext_num++;
-			continue;
-		}
-
-		/* now put it into a phy layer */
-		if (cur_phy_num < ovl_phy_num[ovl_idx]) {
-			cur_phy_num++;
-			cur_phy_idx_in_cfg = i;
-		} else if (ovl_idx < ARRAY_SIZE(ovl_phy_num)) {
-			/* dispatch to next ovl */
-			ovl_idx++;
-			cur_phy_num = 1;
-			cur_phy_idx_in_cfg = i;
-			cur_ext_num = 0;
-		} else {
-			/* no ovl layer aviable !! */
-			goto err_out;
-		}
-	}
-
-	for (i = 0; i < ovl_idx; i++)
-		total_phy_layer += ovl_phy_num[i];
-	total_phy_layer += cur_phy_num;
-	return total_phy_layer;
-
-err_out:
-	DISPWARN("%s failed: ovl_idx=%d, cur_phy=%d, cur_ext=%d\n",
-		__func__, ovl_idx, cur_phy_num, cur_ext_num);
-	for (i = 1; i < cfg->input_layer_num; i++)
-		dump_input_cfg_info(&cfg->input_cfg[i],
-			MAKE_DISP_SESSION(DISP_SESSION_PRIMARY, 0), 1);
-
-	return -1;
 }
 
 int disp_layer_info_statistic(struct disp_ddp_path_config *last_config,
@@ -940,10 +858,7 @@ static void process_dbg_opt(const char *opt)
 		return;
 #endif
 	} else if (strncmp(opt, "diagnose", 8) == 0) {
-		primary_display_diagnose();
 		return;
-	} else if (strncmp(opt, "_efuse_test", 11) == 0) {
-		primary_display_check_test();
 	} else if (strncmp(opt, "dprec_reset", 11) == 0) {
 		dprec_logger_reset_all();
 		return;
@@ -1199,22 +1114,15 @@ static void process_dbg_opt(const char *opt)
 		}
 		enable_idlemgr(flg);
 	} else if (strncmp(opt, "fps:", 4) == 0) {
-		char *p = (char *)opt+4;
-		int fps = kstrtoul(p, 10, (unsigned long int *)&p);
-
 		DDPMSG("change fps\n");
-		primary_display_set_lcm_refresh_rate(fps);
 		return;
 	} else if (strncmp(opt, "disp_mode:", 10) == 0) {
 		char *p = (char *)opt + 10;
 		unsigned long int disp_mode = 0;
 
 		ret = kstrtoul(p, 10, &disp_mode);
-		gTriggerDispMode = (int)disp_mode;
 		if (ret)
 			DISPWARN("DISP/%s: errno %d\n", __func__, ret);
-
-		DISPMSG("DDP: gTriggerDispMode=%d\n", gTriggerDispMode);
 	} else if (strncmp(opt, "disp_set_fps:", 13) == 0) {
 		char *p = (char *)opt + 13;
 		unsigned int disp_fps = 0;
@@ -1299,15 +1207,12 @@ static void process_dbg_opt(const char *opt)
 #ifdef CONFIG_MTK_HIGH_FRAME_RATE
 		primary_display_dynfps_chg_fps(cfg_id);
 #endif
-		g_force_cfg_id = cfg_id;
 		DDPMSG("debug:set_cfg_id:%d end\n", cfg_id);
 	} else if (!strncmp(opt, "enable_force_fps:", 17)) {
 		char *p = (char *)opt + 17;
 		unsigned int enable_force_fps = 0;
 
 		ret = kstrtouint(p, 10, &enable_force_fps);
-		g_force_cfg = !!enable_force_fps;
-		DDPMSG("debug:g_force_cfg:%d\n", g_force_cfg);
 	} else if (!strncmp(opt, "get_multi_cfg", 13)) {
 		struct multi_configs cfgs;
 		unsigned int i = 0;
@@ -1339,7 +1244,6 @@ static void process_dbg_opt(const char *opt)
 
 	if (strncmp(opt, "dsi_ut:restart_vdo_mode", 23) == 0) {
 		dpmgr_path_stop(primary_get_dpmgr_handle(), CMDQ_DISABLE);
-		primary_display_diagnose();
 		dpmgr_path_start(primary_get_dpmgr_handle(), CMDQ_DISABLE);
 		dpmgr_path_trigger(primary_get_dpmgr_handle(),
 			NULL, CMDQ_DISABLE);
@@ -1347,13 +1251,11 @@ static void process_dbg_opt(const char *opt)
 
 	if (strncmp(opt, "dsi_ut:restart_cmd_mode", 23) == 0) {
 		dpmgr_path_stop(primary_get_dpmgr_handle(), CMDQ_DISABLE);
-		primary_display_diagnose();
 
 		dpmgr_path_start(primary_get_dpmgr_handle(), CMDQ_DISABLE);
 		dpmgr_path_trigger(primary_get_dpmgr_handle(),
 			NULL, CMDQ_DISABLE);
 		dpmgr_path_stop(primary_get_dpmgr_handle(), CMDQ_DISABLE);
-		primary_display_diagnose();
 
 		dpmgr_path_start(primary_get_dpmgr_handle(), CMDQ_DISABLE);
 		dpmgr_path_trigger(primary_get_dpmgr_handle(),
@@ -1506,9 +1408,6 @@ int debug_get_info(unsigned char *stringbuf, int buf_len)
 	DISPFUNC();
 
 	n += mtkfb_get_debug_state(stringbuf + n,
-		buf_len - n);
-
-	n += primary_display_get_debug_state(stringbuf + n,
 		buf_len - n);
 
 	n += disp_sync_get_debug_info(stringbuf + n,

@@ -9,6 +9,7 @@
 #include <linux/kernel.h>
 #include <linux/printk.h>
 #include <linux/soc/mediatek/mtk-cmdq.h>
+#include <linux/time.h>
 #include <linux/trace_events.h>
 
 #include "cmdq_def.h"
@@ -23,6 +24,7 @@
 #define CMDQ_AREG_TO_PHYS(addr) ((addr) | 0L)
 
 struct cmdqRecStruct;
+struct gen_pool;
 
 enum TASK_STATE_ENUM {
 	TASK_STATE_IDLE,	/* free task */
@@ -72,14 +74,11 @@ struct DumpFirstErrorStruct {
 #define CMDQ_LOG(string, args...) \
 do {			\
 	pr_debug("[CMDQ]"string, ##args); \
-	cmdq_core_save_first_dump("[CMDQ]"string, ##args); \
 } while (0)
 
 #define CMDQ_MSG(string, args...) \
 do {			\
-	if (cmdq_core_should_print_msg()) { \
-		pr_debug("[CMDQ]"string, ##args); \
-	} \
+	pr_debug("[CMDQ]"string, ##args); \
 } while (0)
 
 #define CMDQ_VERBOSE(string, args...) \
@@ -93,7 +92,6 @@ do { \
 #define CMDQ_ERR(string, args...) \
 do {			\
 	pr_err("[CMDQ][ERR]"string, ##args); \
-	cmdq_core_save_first_dump("[CMDQ][ERR]"string, ##args); \
 } while (0)
 
 #define CMDQ_CHECK_AND_BREAK_STATUS(status)\
@@ -130,14 +128,8 @@ do { \
 #define CMDQ_AEE(tag, string, args...) \
 {		\
 do {			\
-	char dispatchedTag[50]; \
-	int len = snprintf(dispatchedTag, 50, "CRDISPATCH_KEY:%s", tag); \
-	if (len >= 50) \
-		pr_debug("%s:%d len:%d over 50\n", __func__, __LINE__, len); \
-	pr_debug("[CMDQ][AEE] AEE not READY!!!"); \
-	pr_debug("[CMDQ][AEE]"string, ##args); \
-	cmdq_core_save_first_dump("[CMDQ][AEE]"string, ##args); \
-	cmdq_core_turnoff_first_dump(); \
+	if (0) \
+		pr_debug("[CMDQ][AEE]"string, ##args); \
 } while (0);	\
 }
 #endif
@@ -535,18 +527,6 @@ struct ResourceUnitStruct {
 	struct delayed_work delayCheckWork;
 };
 
-/* SRAM chunk structure
- *	allocated_start: allocated start address
- *	allocated_size: allocated SRAM size
- *	allocated_owner: allocate owner name
- */
-struct SRAMChunk {
-	struct list_head list_node;
-	u32 start_offset;
-	size_t count;
-	char owner[CMDQ_MAX_SRAM_OWNER_NAME];
-};
-
 /**
  * shared memory between normal and secure world
  */
@@ -586,13 +566,10 @@ struct ContextStruct {
 	bool aee;
 
 	/* SRAM manager information */
-	struct list_head sram_allocated_list;	/* all allocated SRAM chunk */
-	size_t allocated_sram_count;
+	struct gen_pool *sram_pool;
 
 	/* Delay set CPR start information */
 	u32 delay_cpr_start;
-
-	void *inst_check_buffer;
 
 #ifdef CMDQ_INSTRUCTION_COUNT
 	/* GCE instructions count information */
@@ -625,6 +602,12 @@ struct task_private {
 	void *node_private_data;
 	bool internal;		/* internal used only task */
 	bool ignore_timeout;	/* timeout is expected */
+};
+
+struct mdp_pmqos_record {
+	uint32_t mdp_throughput;
+	struct timeval submit_tm;
+	struct timeval end_tm;
 };
 
 enum cmdq_thread_dispatch {
@@ -668,7 +651,6 @@ struct cmdqRecStruct {
 	const char *sram_owner_name;
 	u32 sram_base;	/* Original PA address of SRAM buffer content */
 	void *node_private;
-	void *user_private;
 
 	struct cmdqSecDataStruct secData;	/* secure execution data */
 
@@ -735,6 +717,7 @@ struct cmdqRecStruct {
 	/* PMQoS information */
 	void *prop_addr;
 	u32 prop_size;
+	struct mdp_pmqos_record pmqos_record;
 
 	/* secure world */
 	struct iwcCmdqSecStatus_t *secStatus;
@@ -760,7 +743,6 @@ u32 cmdq_event_get_table_size(void);
 
 /* CMDQ core feature functions */
 
-bool cmdq_core_check_user_valid(void *src, u32 size);
 bool cmdq_core_check_pkt_valid(struct cmdq_pkt *pkt);
 
 void cmdq_core_deinit_group_cb(void);
@@ -805,9 +787,6 @@ void cmdq_core_set_aee(bool enable);
 
 bool cmdq_core_ftrace_enabled(void);
 bool cmdq_core_profile_exec_enabled(void);
-void cmdq_long_string_init(bool force, char *buf, u32 *offset, s32 *max_size);
-void cmdq_long_string(char *buf, u32 *offset, s32 *max_size,
-	const char *string, ...);
 
 s32 cmdq_core_reg_dump_begin(u32 taskID, u32 *regCount,
 	u32 **regAddress);

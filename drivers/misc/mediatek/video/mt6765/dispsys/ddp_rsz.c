@@ -245,7 +245,6 @@ static int rsz_config(enum DISP_MODULE_ENUM module,
 			c->dst_x, c->dst_y, c->dst_w, c->dst_h);
 		if (!dump) {
 			dump = true;
-			primary_display_diagnose();
 #ifdef CONFIG_MTK_AEE_AED
 			disp_aee_print("need rsz but input w(%u) > (%u)\n",
 				       rsz_config->frm_in_w, RSZ_TILE_LENGTH);
@@ -451,7 +450,6 @@ void rsz_dump_analysis(enum DISP_MODULE_ENUM module)
 
 void rsz_dump_reg(enum DISP_MODULE_ENUM module)
 {
-	unsigned long rsz_base = rsz_base_addr(module);
 	int i = 0;
 
 	DDPDUMP("== DISP %s REGS ==\n", ddp_get_module_name(module));

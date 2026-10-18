@@ -69,11 +69,12 @@ static int statfs_by_dentry(struct dentry *dentry, struct kstatfs *buf)
 
 int vfs_statfs(const struct path *path, struct kstatfs *buf)
 {
-    int error;
-    error = statfs_by_dentry(path->dentry, buf);
-    if (!error)
-        buf->f_flags = calculate_f_flags(path->mnt);
-    return error;
+	int error;
+
+	error = statfs_by_dentry(path->dentry, buf);
+	if (!error)
+		buf->f_flags = calculate_f_flags(path->mnt);
+	return error;
 }
 EXPORT_SYMBOL(vfs_statfs);
 
@@ -92,7 +93,6 @@ retry:
 			goto retry;
 		}
 	}
-
 	return error;
 }
 

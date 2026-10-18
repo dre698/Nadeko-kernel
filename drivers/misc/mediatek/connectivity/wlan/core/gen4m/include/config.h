@@ -232,6 +232,9 @@
 /* Enable QA Tool Support */
 #define CFG_SUPPORT_QA_TOOL	1
 
+/* Exclude the production-unneeded QA daemon command interface. */
+#define CFG_SUPPORT_QA_AGENT	0
+
 /* Enable TX BF Support */
 #define CFG_SUPPORT_TX_BF	1
 
@@ -404,7 +407,7 @@
 
 #define CFG_MULTI_ECOVER_SUPPORT	1
 
-#define CFG_ENABLE_CAL_LOG		1
+#define CFG_ENABLE_CAL_LOG		0
 #define CFG_REPORT_RFBB_VERSION		1
 
 #define MAX_BSSID_NUM			4	/* MAX BSSID number */
@@ -631,7 +634,7 @@
  */
 /*!< 1: Debug statistics usage of MGMT Buffer */
 /* 0: Disable */
-#define CFG_DBG_MGT_BUF                         1
+#define CFG_DBG_MGT_BUF                         0
 
 #define CFG_HIF_STATISTICS                      0
 
@@ -643,7 +646,7 @@
 
 #define CFG_ASSERT_DUMP                         1
 
-#define CFG_SUPPORT_TRACE_TC4			1
+#define CFG_SUPPORT_TRACE_TC4			0
 /*------------------------------------------------------------------------------
  * Flags of Firmware Download Option.
  *------------------------------------------------------------------------------
@@ -1020,7 +1023,7 @@
 
 #define CFG_ENABLE_PER_STA_STATISTICS       1
 
-#define CFG_ENABLE_PER_STA_STATISTICS_LOG 1
+#define CFG_ENABLE_PER_STA_STATISTICS_LOG 0
 
 /*------------------------------------------------------------------------------
  * Flags for prepare the FW compile flag

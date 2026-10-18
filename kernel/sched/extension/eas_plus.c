@@ -106,7 +106,7 @@ static inline void fillin_cluster(struct cluster_info *cinfo,
 	cinfo->cpu = cpumask_any(&cinfo->pod->possible_cpus);
 
 	for_each_cpu(cpu, &pod->possible_cpus) {
-		cpu_perf = arch_scale_cpu_capacity(NULL, cpu);
+		cpu_perf = arch_scale_cpu_capacity(cpu);
 		pr_info("cpu=%d, cpu_perf=%lu\n", cpu, cpu_perf);
 		if (cpu_perf > 0)
 			break;
@@ -276,7 +276,7 @@ int select_task_prefer_cpu(struct task_struct *p, int new_cpu)
 	struct perf_order_domain *tmp_domain[5] = {0, 0, 0, 0, 0};
 	int i, iter_domain, domain_cnt = 0;
 	int iter_cpu;
-	struct cpumask *tsk_cpus_allow = &p->cpus_allowed;
+	struct cpumask *tsk_cpus_allow = p->cpus_ptr;
 
 	task_prefer = cpu_prefer(p);
 
@@ -967,7 +967,7 @@ static inline bool iso_is_per_cpu_kthread(struct task_struct *p)
  */
 static inline bool iso_is_cpu_allowed(struct task_struct *p, int cpu)
 {
-	if (!cpumask_test_cpu(cpu, &p->cpus_allowed))
+	if (!cpumask_test_cpu(cpu, p->cpus_ptr))
 		return false;
 
 	if (iso_is_per_cpu_kthread(p))

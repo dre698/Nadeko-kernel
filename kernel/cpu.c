@@ -335,7 +335,7 @@ static void lockdep_acquire_cpus_lock(void)
 
 static void lockdep_release_cpus_lock(void)
 {
-	rwsem_release(&cpu_hotplug_lock.rw_sem.dep_map, 1, _THIS_IP_);
+	rwsem_release(&cpu_hotplug_lock.rw_sem.dep_map, _THIS_IP_);
 }
 
 /*
@@ -1356,6 +1356,7 @@ void enable_nonboot_cpus(void)
 	arch_enable_nonboot_cpus_end();
 
 	cpumask_clear(frozen_cpus);
+	balance_irqs();
 out:
 	cpu_maps_update_done();
 }

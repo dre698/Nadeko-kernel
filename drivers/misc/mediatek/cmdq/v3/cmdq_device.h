@@ -16,9 +16,6 @@
 	u32 cmdq_dev_enable_clock_##HW_NAME(bool enable)
 DECLARE_ENABLE_HW_CLOCK(SMI_COMMON);
 DECLARE_ENABLE_HW_CLOCK(SMI_LARB0);
-#ifdef CMDQ_USE_LEGACY
-DECLARE_ENABLE_HW_CLOCK(MUTEX_32K);
-#endif
 #undef DECLARE_ENABLE_HW_CLOCK
 
 void cmdq_dev_get_module_clock_by_name(const char *ref_name,
@@ -26,11 +23,6 @@ void cmdq_dev_get_module_clock_by_name(const char *ref_name,
 u32 cmdq_dev_enable_device_clock(bool enable, struct clk *clk_module,
 	const char *clkName);
 bool cmdq_dev_device_clock_is_enable(struct clk *clk_module);
-/* For test case used */
-void testcase_clkmgr_impl(enum CMDQ_ENG_ENUM engine,
-	char *name, const unsigned long testWriteReg,
-	const u32 testWriteValue,
-	const unsigned long testReadReg, const bool verifyWriteResult);
 
 struct device *cmdq_dev_get(void);
 /* interrupt index */

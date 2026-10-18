@@ -952,10 +952,10 @@ static int setup_kmem_cache_node(struct kmem_cache *cachep,
 	 * To protect lockless access to n->shared during irq disabled context.
 	 * If n->shared isn't NULL in irq disabled context, accessing to it is
 	 * guaranteed to be valid until irq is re-enabled, because it will be
-	 * freed after synchronize_sched().
+	 * freed after synchronize_rcu().
 	 */
 	if (old_shared && force_change)
-		synchronize_sched();
+		synchronize_rcu();
 
 fail:
 	kfree(old_shared);
@@ -1238,7 +1238,7 @@ void __init kmem_cache_init(void)
 	 * page orders on machines with more than 32MB of memory if
 	 * not overridden on the command line.
 	 */
-	if (!slab_max_order_set && totalram_pages > (32 << 20) >> PAGE_SHIFT)
+	if (!slab_max_order_set && totalram_pages() > (32 << 20) >> PAGE_SHIFT)
 		slab_max_order = SLAB_MAX_ORDER_HI;
 
 	/* Bootstrap is tricky, because several objects are allocated
@@ -4276,12 +4276,12 @@ static void handle_slab(unsigned long *n, struct kmem_cache *c,
 			continue;
 
 		/*
-		 * probe_kernel_read() is used for DEBUG_PAGEALLOC. page table
+		 * copy_from_kernel_nofault() is used for DEBUG_PAGEALLOC. page table
 		 * mapping is established when actual object allocation and
 		 * we could mistakenly access the unmapped object in the cpu
 		 * cache.
 		 */
-		if (probe_kernel_read(&v, dbg_userword(c, p), sizeof(v)))
+		if (copy_from_kernel_nofault(&v, dbg_userword(c, p), sizeof(v)))
 			continue;
 
 		if (!add_caller(n, v))

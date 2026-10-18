@@ -281,56 +281,6 @@ unsigned int mt_gpufreq_target(unsigned int idx)
 	target_idx = g_opp_table[idx].gpufreq_idx;
 	target_cond_idx = idx;
 
-	gpufreq_pr_debug("@%s: receive freq: %d, index: %d\n",
-		__func__, target_freq, target_idx);
-
-	/* OPP freq is limited by Thermal/Power/PBM */
-	if (g_max_limited_idx != 0) {
-		if (target_freq > g_opp_table[g_max_limited_idx].gpufreq_khz) {
-			target_freq =
-				g_opp_table[g_max_limited_idx].gpufreq_khz;
-			target_volt =
-				g_opp_table[g_max_limited_idx].gpufreq_volt;
-			target_idx = g_opp_table[g_max_limited_idx].gpufreq_idx;
-			target_cond_idx = g_max_limited_idx;
-			gpufreq_pr_debug("@%s: OPP freq is limited by Thermal/Power/PBM, g_max_limited_idx = %d\n",
-					__func__, target_cond_idx);
-		}
-	}
-
-	/* If /proc command keep OPP freq */
-	if (g_keep_opp_freq_state) {
-		target_freq = g_opp_table[g_keep_opp_freq_idx].gpufreq_khz;
-		target_volt = g_opp_table[g_keep_opp_freq_idx].gpufreq_volt;
-		target_idx = g_opp_table[g_keep_opp_freq_idx].gpufreq_idx;
-		target_cond_idx = g_keep_opp_freq_idx;
-		gpufreq_pr_debug(
-			"@%s: keep OPP freq, freq = %d, volt = %d, idx = %d\n",
-			__func__, target_freq, target_volt, target_cond_idx);
-	}
-
-	/* If /proc command fix the freq and volt */
-	if (g_fixed_freq_volt_state) {
-		target_freq = g_fixed_freq;
-		target_volt = g_fixed_volt;
-		target_idx = 0;
-		target_cond_idx = 0;
-		gpufreq_pr_debug(
-			"@%s: fixed both freq and volt, freq = %d, volt = %d\n",
-			__func__, target_freq, target_volt);
-	}
-
-	/* keep at max freq when PTPOD is initializing */
-	if (g_DVFS_is_paused_by_ptpod) {
-		target_freq = g_opp_table[g_DVFS_off_by_ptpod_idx].gpufreq_khz;
-		target_volt = GPU_DVFS_PTPOD_DISABLE_VOLT;
-		target_idx = g_opp_table[g_DVFS_off_by_ptpod_idx].gpufreq_idx;
-		target_cond_idx = g_DVFS_off_by_ptpod_idx;
-		gpufreq_pr_debug(
-			"@%s: PTPOD disable DVFS, g_DVFS_off_by_ptpod_idx = %d\n",
-			__func__, target_cond_idx);
-	}
-
 	/* target freq == current freq
 	 * && target volt == current volt, skip it
 	 */
@@ -1284,7 +1234,7 @@ static ssize_t mt_gpufreq_opp_freq_proc_write(struct file *file,
 
 	if (kstrtouint(buf, 10, &value) == 0) {
 		if (value == 0) {
-			g_keep_opp_freq_state = true;
+			g_keep_opp_freq_state = false;
 		} else {
 			for (i = 0; i < g_opp_idx_num; i++) {
 				if (value == g_opp_table[i].gpufreq_khz) {
@@ -1420,15 +1370,15 @@ static int __mt_gpufreq_create_procfs(void)
 
 static void __mt_gpufreq_vcore_volt_switch(unsigned int volt_target)
 {
-	if (volt_target > 90000) {
+	if (volt_target > 70000) {
 		mtk_pm_qos_update_request(&g_pmic->mtk_pm_vgpu, VCORE_OPP_0);
 		g_cur_vcore_opp = VCORE_OPP_0;
-	} else if (volt_target > 80000) {
-		mtk_pm_qos_update_request(&g_pmic->mtk_pm_vgpu, VCORE_OPP_1 * 9 / 10);
-		g_cur_vcore_opp = VCORE_OPP_1;
+	} else if (volt_target > 65000) {
+		mtk_pm_qos_update_request(&g_pmic->mtk_pm_vgpu, VCORE_OPP_0);
+		g_cur_vcore_opp = VCORE_OPP_0;
 	} else if (volt_target > 0) {
-		mtk_pm_qos_update_request(&g_pmic->mtk_pm_vgpu, VCORE_OPP_3 * 9 / 10);
-		g_cur_vcore_opp = VCORE_OPP_3;
+		mtk_pm_qos_update_request(&g_pmic->mtk_pm_vgpu, VCORE_OPP_2);
+		g_cur_vcore_opp = VCORE_OPP_2;
 	} else /* UNREQUEST */
 		mtk_pm_qos_update_request(&g_pmic->mtk_pm_vgpu,
 			VCORE_OPP_UNREQ);

@@ -59,6 +59,9 @@
 
 #include "mtk_charger.h"
 
+bool g_charging_disabled = false;
+EXPORT_SYMBOL(g_charging_disabled);
+
 #if CONFIG_TOUCHSCREEN_COMMON
 typedef struct touchscreen_usb_piugin_data {
 	bool valid;
@@ -166,6 +169,7 @@ static void mtk_charger_parse_dt(struct mtk_charger *info,
 			info->boottype = tag->boottype;
 		}
 	}
+	of_node_put(boot_node);
 
 	if (of_property_read_string(np, "algorithm_name",
 		&info->algorithm_name) < 0) {
@@ -484,8 +488,8 @@ static void mtk_charger_start_timer(struct mtk_charger *info)
 	info->endtime = timespec_add(time_now, time);
 	ktime = ktime_set(info->endtime.tv_sec, info->endtime.tv_nsec);
 
-	chr_err("%s: alarm timer start:%d, %ld %ld\n", __func__, ret,
-		info->endtime.tv_sec, info->endtime.tv_nsec);
+	chr_debug("%s: alarm timer start:%d, %ld %ld\n", __func__, ret,
+		  info->endtime.tv_sec, info->endtime.tv_nsec);
 	alarm_start(&info->charger_timer, ktime);
 }
 
@@ -879,6 +883,46 @@ static ssize_t BatteryNotify_store(struct device *dev,
 
 static DEVICE_ATTR_RW(BatteryNotify);
 
+/* charging_enabled sysfs node */
+static ssize_t charging_enabled_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct mtk_charger *pinfo = dev->driver_data;
+	int enabled = pinfo->cmd_discharging ? 0 : 1;
+	return sprintf(buf, "%d\n", enabled);
+}
+
+static ssize_t charging_enabled_store(struct device *dev,
+				struct device_attribute *attr,
+				const char *buf, size_t size)
+{
+	struct mtk_charger *pinfo = dev->driver_data;
+	long temp;
+
+	if (kstrtol(buf, 10, &temp) == 0) {
+		if (temp == 0) {
+			pinfo->cmd_discharging = true;
+			g_charging_disabled = true;
+			if (pinfo->chg1_dev) {
+				charger_dev_enable(pinfo->chg1_dev, false);
+				charger_dev_set_charging_current(pinfo->chg1_dev, 0);
+				charger_dev_set_input_current(pinfo->chg1_dev, 0);
+				charger_dev_do_event(pinfo->chg1_dev, EVENT_DISCHARGE, 0);
+			}
+		} else {
+			pinfo->cmd_discharging = false;
+			g_charging_disabled = false;
+			if (pinfo->chg1_dev) {
+				charger_dev_enable(pinfo->chg1_dev, true);
+				charger_dev_do_event(pinfo->chg1_dev, EVENT_RECHARGE, 0);
+			}
+		}
+		_wake_up_charger(pinfo);
+	}
+	return size;
+}
+static DEVICE_ATTR(charging_enabled, 0664, charging_enabled_show, charging_enabled_store);
+
 /* procfs */
 static int mtk_chg_current_cmd_show(struct seq_file *m, void *data)
 {
@@ -904,7 +948,7 @@ static ssize_t mtk_chg_current_cmd_write(struct file *file,
 
 	if (!info)
 		return -EINVAL;
-	if (count <= 0)
+	if (!count)
 		return -EINVAL;
 
 	len = (count < (sizeof(desc) - 1)) ? count : (sizeof(desc) - 1);
@@ -1534,24 +1578,6 @@ static void kpoc_power_off_check(struct mtk_charger *info)
 	}
 }
 
-static char *dump_charger_type(int type)
-{
-	switch (type) {
-	case POWER_SUPPLY_TYPE_UNKNOWN:
-		return "none";
-	case POWER_SUPPLY_TYPE_USB:
-		return "usb";
-	case POWER_SUPPLY_TYPE_USB_CDP:
-		return "usb-h";
-	case POWER_SUPPLY_TYPE_USB_DCP:
-		return "std";
-	case POWER_SUPPLY_TYPE_USB_FLOAT:
-		return "nonstd";
-	default:
-		return "unknown";
-	}
-}
-
 static int charger_routine_thread(void *arg)
 {
 	struct mtk_charger *info = arg;
@@ -1580,6 +1606,7 @@ static int charger_routine_thread(void *arg)
 		info->charger_thread_timeout = false;
 
 		info->battery_temp = get_battery_temperature(info);
+#if 0
 		chr_err("Vbat=%d vbus:%d ibus:%d I=%d T=%d uisoc:%d type:%s>%s pd:%d\n",
 			get_battery_voltage(info),
 			get_vbus(info),
@@ -1590,6 +1617,7 @@ static int charger_routine_thread(void *arg)
 			dump_charger_type(info->chr_type),
 			dump_charger_type(get_charger_type(info)),
 			info->pd_type);
+#endif
 
 		is_charger_on = mtk_is_charger_on(info);
 
@@ -1654,8 +1682,8 @@ static int charger_pm_event(struct notifier_block *notifier,
 		if (timespec_compare(&now, &info->endtime) >= 0 &&
 			info->endtime.tv_sec != 0 &&
 			info->endtime.tv_nsec != 0) {
-			chr_err("%s: alarm timeout, wake up charger\n",
-				__func__);
+			chr_debug("%s: alarm timeout, wake up charger\n",
+				  __func__);
 			__pm_relax(info->charger_wakelock);
 			info->endtime.tv_sec = 0;
 			info->endtime.tv_nsec = 0;
@@ -1676,10 +1704,10 @@ static enum alarmtimer_restart
 	container_of(alarm, struct mtk_charger, charger_timer);
 
 	if (info->is_suspend == false) {
-		chr_err("%s: not suspend, wake up charger\n", __func__);
+		chr_debug("%s: not suspend, wake up charger\n", __func__);
 		_wake_up_charger(info);
 	} else {
-		chr_err("%s: alarm timer timeout\n", __func__);
+		chr_debug("%s: alarm timer timeout\n", __func__);
 		__pm_stay_awake(info->charger_wakelock);
 	}
 
@@ -1729,6 +1757,10 @@ static int mtk_charger_setup_files(struct platform_device *pdev)
 
 	/* Battery warning */
 	ret = device_create_file(&(pdev->dev), &dev_attr_BatteryNotify);
+	if (ret)
+		goto _out;
+
+	ret = device_create_file(&(pdev->dev), &dev_attr_charging_enabled);
 	if (ret)
 		goto _out;
 
@@ -1928,7 +1960,7 @@ int psy_charger_set_property(struct power_supply *psy,
 static void mtk_charger_external_power_changed(struct power_supply *psy)
 {
 	struct mtk_charger *info;
-	union power_supply_propval prop, prop2;
+	union power_supply_propval prop = {0}, prop2 = {0};
 	struct power_supply *chg_psy = NULL;
 	int ret;
 
@@ -1943,8 +1975,9 @@ static void mtk_charger_external_power_changed(struct power_supply *psy)
 	} else {
 		ret = power_supply_get_property(chg_psy,
 			POWER_SUPPLY_PROP_ONLINE, &prop);
-		ret = power_supply_get_property(chg_psy,
-			POWER_SUPPLY_PROP_USB_TYPE, &prop2);
+		if (!ret)
+			ret = power_supply_get_property(chg_psy,
+				POWER_SUPPLY_PROP_USB_TYPE, &prop2);
 	}
 
 	pr_notice("%s event, name:%s online:%d type:%d vbus:%d\n", __func__,
@@ -2092,18 +2125,28 @@ static int mtk_charger_probe(struct platform_device *pdev)
 	info->psy_desc1.external_power_changed =
 		mtk_charger_external_power_changed;
 	info->psy_cfg1.drv_data = info;
-	info->psy1 = power_supply_register(&pdev->dev, &info->psy_desc1,
+	info->psy1 = devm_power_supply_register(&pdev->dev, &info->psy_desc1,
 			&info->psy_cfg1);
+	if (IS_ERR(info->psy1)) {
+		chr_err("register psy1 fail:%ld\n", PTR_ERR(info->psy1));
+		return PTR_ERR(info->psy1);
+	}
 
 	info->chg_psy = devm_power_supply_get_by_phandle(&pdev->dev,
 		"charger");
-	if (IS_ERR_OR_NULL(info->chg_psy))
+	if (IS_ERR(info->chg_psy)) {
+		if (PTR_ERR(info->chg_psy) == -EPROBE_DEFER)
+			return -EPROBE_DEFER;
 		chr_err("%s: devm power fail to get chg_psy\n", __func__);
+	}
 
 	info->bat_psy = devm_power_supply_get_by_phandle(&pdev->dev,
 		"gauge");
-	if (IS_ERR_OR_NULL(info->bat_psy))
+	if (IS_ERR(info->bat_psy)) {
+		if (PTR_ERR(info->bat_psy) == -EPROBE_DEFER)
+			return -EPROBE_DEFER;
 		chr_err("%s: devm power fail to get bat_psy\n", __func__);
+	}
 
 	if (IS_ERR(info->psy1))
 		chr_err("register psy1 fail:%d\n",
@@ -2118,18 +2161,20 @@ static int mtk_charger_probe(struct platform_device *pdev)
 	info->psy_desc2.property_is_writeable =
 			psy_charger_property_is_writeable;
 	info->psy_cfg2.drv_data = info;
-	info->psy2 = power_supply_register(&pdev->dev, &info->psy_desc2,
+	info->psy2 = devm_power_supply_register(&pdev->dev, &info->psy_desc2,
 			&info->psy_cfg2);
 
-	if (IS_ERR(info->psy2))
-		chr_err("register psy2 fail:%d\n",
+	if (IS_ERR(info->psy2)) {
+		chr_err("register psy2 fail:%ld\n",
 			PTR_ERR(info->psy2));
+		return PTR_ERR(info->psy2);
+	}
 
 	info->log_level = CHRLOG_DEBUG_LEVEL;
 
 	info->pd_adapter = get_adapter_by_name("pd_adapter");
 	if (!info->pd_adapter)
-		chr_err("%s: No pd adapter found\n");
+		chr_err("%s: No pd adapter found\n", __func__);
 	else {
 		info->pd_nb.notifier_call = notify_adapter_event;
 		register_adapter_device_notifier(info->pd_adapter,

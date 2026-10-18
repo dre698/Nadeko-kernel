@@ -30,6 +30,8 @@
 #include <linux/ip.h>
 #include <linux/rcupdate.h>
 #include <linux/spinlock.h>
+#include <linux/bitmap.h>
+#include <linux/mutex.h>
 
 #include <net/sock.h>
 #include <net/protocol.h>
@@ -45,22 +47,58 @@
 
 #define MAX_CALLID 65535
 
-static DECLARE_BITMAP(callid_bitmap, MAX_CALLID + 1);
+static unsigned long *callid_bitmap;
 static struct pppox_sock __rcu **callid_sock;
 
 static DEFINE_SPINLOCK(chan_lock);
+static DEFINE_MUTEX(callid_mutex);
 
 static struct proto pptp_sk_proto __read_mostly;
 static const struct ppp_channel_ops pptp_chan_ops;
 static const struct proto_ops pptp_ops;
 
+static int pptp_alloc_callid_tables(void)
+{
+	struct pppox_sock __rcu **sock_table;
+	unsigned long *bitmap;
+	int err = 0;
+
+	mutex_lock(&callid_mutex);
+	if (callid_sock)
+		goto out;
+
+	bitmap = bitmap_zalloc(MAX_CALLID + 1, GFP_KERNEL);
+	if (!bitmap) {
+		err = -ENOMEM;
+		goto out;
+	}
+
+	sock_table = vzalloc(array_size(sizeof(void *), MAX_CALLID + 1));
+	if (!sock_table) {
+		bitmap_free(bitmap);
+		err = -ENOMEM;
+		goto out;
+	}
+
+	callid_bitmap = bitmap;
+	smp_store_release(&callid_sock, sock_table);
+out:
+	mutex_unlock(&callid_mutex);
+	return err;
+}
+
 static struct pppox_sock *lookup_chan(u16 call_id, __be32 s_addr)
 {
+	struct pppox_sock __rcu **sock_table;
 	struct pppox_sock *sock;
 	struct pptp_opt *opt;
 
+	sock_table = smp_load_acquire(&callid_sock);
+	if (!sock_table)
+		return NULL;
+
 	rcu_read_lock();
-	sock = rcu_dereference(callid_sock[call_id]);
+	sock = rcu_dereference(sock_table[call_id]);
 	if (sock) {
 		opt = &sock->proto.pptp;
 		if (opt->dst_addr.sin_addr.s_addr != s_addr)
@@ -75,14 +113,19 @@ static struct pppox_sock *lookup_chan(u16 call_id, __be32 s_addr)
 
 static int lookup_chan_dst(u16 call_id, __be32 d_addr)
 {
+	struct pppox_sock __rcu **sock_table;
 	struct pppox_sock *sock;
 	struct pptp_opt *opt;
 	int i;
 
+	sock_table = smp_load_acquire(&callid_sock);
+	if (!sock_table)
+		return 0;
+
 	rcu_read_lock();
 	i = 1;
 	for_each_set_bit_from(i, callid_bitmap, MAX_CALLID) {
-		sock = rcu_dereference(callid_sock[i]);
+		sock = rcu_dereference(sock_table[i]);
 		if (!sock)
 			continue;
 		opt = &sock->proto.pptp;
@@ -146,15 +189,13 @@ static int pptp_xmit(struct ppp_channel *chan, struct sk_buff *skb)
 	int len;
 	unsigned char *data;
 	__u32 seq_recv;
-
-
 	struct rtable *rt;
 	struct net_device *tdev;
 	struct iphdr  *iph;
 	int    max_headroom;
 
 	if (sk_pppox(po)->sk_state & PPPOX_DEAD)
-		goto tx_error;
+		goto tx_drop;
 
 	rt = ip_route_output_ports(net, &fl4, NULL,
 				   opt->dst_addr.sin_addr.s_addr,
@@ -162,7 +203,7 @@ static int pptp_xmit(struct ppp_channel *chan, struct sk_buff *skb)
 				   0, 0, IPPROTO_GRE,
 				   RT_TOS(0), 0);
 	if (IS_ERR(rt))
-		goto tx_error;
+		goto tx_drop;
 
 	tdev = rt->dst.dev;
 
@@ -170,15 +211,19 @@ static int pptp_xmit(struct ppp_channel *chan, struct sk_buff *skb)
 
 	if (skb_headroom(skb) < max_headroom || skb_cloned(skb) || skb_shared(skb)) {
 		struct sk_buff *new_skb = skb_realloc_headroom(skb, max_headroom);
-		if (!new_skb) {
-			ip_rt_put(rt);
+
+		if (!new_skb)
 			goto tx_error;
-		}
+
 		if (skb->sk)
 			skb_set_owner_w(new_skb, skb->sk);
 		consume_skb(skb);
 		skb = new_skb;
 	}
+
+	/* Ensure we can safely access protocol field and LCP code */
+	if (!pskb_may_pull(skb, 3))
+		goto tx_error;
 
 	data = skb->data;
 	islcp = ((data[0] << 8) + data[1]) == PPP_LCP && 1 <= data[2] && data[2] <= 7;
@@ -253,6 +298,8 @@ static int pptp_xmit(struct ppp_channel *chan, struct sk_buff *skb)
 	return 1;
 
 tx_error:
+	ip_rt_put(rt);
+tx_drop:
 	kfree_skb(skb);
 	return 1;
 }
@@ -542,6 +589,10 @@ static int pptp_create(struct net *net, struct socket *sock, int kern)
 	struct pppox_sock *po;
 	struct pptp_opt *opt;
 
+	error = pptp_alloc_callid_tables();
+	if (error)
+		goto out;
+
 	sk = sk_alloc(net, PF_PPPOX, GFP_KERNEL, &pptp_sk_proto, kern);
 	if (!sk)
 		goto out;
@@ -647,14 +698,10 @@ static int __init pptp_init_module(void)
 	int err = 0;
 	pr_info("PPTP driver version " PPTP_DRIVER_VERSION "\n");
 
-	callid_sock = vzalloc(array_size(sizeof(void *), (MAX_CALLID + 1)));
-	if (!callid_sock)
-		return -ENOMEM;
-
 	err = gre_add_protocol(&gre_pptp_protocol, GREPROTO_PPTP);
 	if (err) {
 		pr_err("PPTP: can't add gre protocol\n");
-		goto out_mem_free;
+		return err;
 	}
 
 	err = proto_register(&pptp_sk_proto, 0);
@@ -675,8 +722,6 @@ out_unregister_sk_proto:
 	proto_unregister(&pptp_sk_proto);
 out_gre_del_protocol:
 	gre_del_protocol(&gre_pptp_protocol, GREPROTO_PPTP);
-out_mem_free:
-	vfree(callid_sock);
 
 	return err;
 }
@@ -687,6 +732,7 @@ static void __exit pptp_exit_module(void)
 	proto_unregister(&pptp_sk_proto);
 	gre_del_protocol(&gre_pptp_protocol, GREPROTO_PPTP);
 	vfree(callid_sock);
+	bitmap_free(callid_bitmap);
 }
 
 module_init(pptp_init_module);

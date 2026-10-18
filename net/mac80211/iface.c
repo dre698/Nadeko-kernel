@@ -65,7 +65,7 @@ bool __ieee80211_recalc_txpower(struct ieee80211_sub_if_data *sdata)
 	if (sdata->user_power_level != IEEE80211_UNSET_POWER_LEVEL)
 		power = min(power, sdata->user_power_level);
 
-	if (sdata->ap_power_level != IEEE80211_UNSET_POWER_LEVEL)
+	if (sdata->ap_power_level != IEEE80211_UNSET_POWER_LEVEL && sdata->vif.bss_conf.txpower_type != NL80211_TX_POWER_FIXED)
 		power = min(power, sdata->ap_power_level);
 
 	if (power != sdata->vif.bss_conf.txpower) {
@@ -1025,6 +1025,9 @@ static void ieee80211_do_stop(struct ieee80211_sub_if_data *sdata,
 
 	if (sdata->vif.type == NL80211_IFTYPE_AP_VLAN)
 		ieee80211_txq_remove_vlan(local, sdata);
+
+	if (sdata->vif.txq)
+		ieee80211_txq_purge(sdata->local, to_txq_info(sdata->vif.txq));
 
 	sdata->bss = NULL;
 

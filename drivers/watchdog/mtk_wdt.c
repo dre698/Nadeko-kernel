@@ -20,6 +20,7 @@
 #include <linux/of_device.h>
 #include <linux/platform_device.h>
 #include <linux/reset-controller.h>
+#include <linux/string.h>
 #include <linux/types.h>
 #include <linux/watchdog.h>
 
@@ -71,6 +72,7 @@ struct mtk_wdt_dev {
 	void __iomem *wdt_base;
 	spinlock_t lock; /* protects WDT_SWSYSRST reg */
 	struct reset_controller_dev rcdev;
+	bool suspend_wdt_running;
 };
 
 struct mtk_wdt_data {
@@ -197,8 +199,14 @@ static int mtk_wdt_restart(struct watchdog_device *wdt_dev,
 {
 	struct mtk_wdt_dev *mtk_wdt = watchdog_get_drvdata(wdt_dev);
 	void __iomem *wdt_base;
+	u32 reg;
 
 	wdt_base = mtk_wdt->wdt_base;
+
+	/* Enable reset in order to issue a system reset instead of an IRQ */
+	reg = readl(wdt_base + WDT_MODE);
+	reg &= ~WDT_MODE_IRQ_EN;
+	writel(reg | WDT_MODE_KEY, wdt_base + WDT_MODE);
 
 	while (1) {
 		writel(WDT_SWRST_KEY, wdt_base + WDT_SWRST);
@@ -212,6 +220,16 @@ static int mtk_wdt_ping(struct watchdog_device *wdt_dev)
 {
 	struct mtk_wdt_dev *mtk_wdt = watchdog_get_drvdata(wdt_dev);
 	void __iomem *wdt_base = mtk_wdt->wdt_base;
+	u32 mode;
+
+	/*
+	 * Force the RGU into reset mode before asserting SWRST.  Leaving dual
+	 * mode or the interrupt path enabled can turn the reboot request into
+	 * a watchdog interrupt followed by a delayed timeout reset.
+	 */
+	mode = readl(wdt_base + WDT_MODE);
+	mode &= ~(WDT_MODE_DUAL_EN | WDT_MODE_IRQ_EN);
+	writel(WDT_MODE_KEY | mode, wdt_base + WDT_MODE);
 
 	iowrite32(WDT_RST_RELOAD, wdt_base + WDT_RST);
 
@@ -347,7 +365,9 @@ static int mtk_wdt_probe(struct platform_device *pdev)
 static int mtk_wdt_suspend(struct device *dev)
 {
 	struct mtk_wdt_dev *mtk_wdt = dev_get_drvdata(dev);
-	if (watchdog_hw_running(&mtk_wdt->wdt_dev))
+	mtk_wdt->suspend_wdt_running =
+		watchdog_hw_running(&mtk_wdt->wdt_dev);
+	if (mtk_wdt->suspend_wdt_running)
 		mtk_wdt_stop(&mtk_wdt->wdt_dev);
 
 	return 0;
@@ -357,9 +377,10 @@ static int mtk_wdt_resume(struct device *dev)
 {
 	struct mtk_wdt_dev *mtk_wdt = dev_get_drvdata(dev);
 
-	if (watchdog_hw_running(&mtk_wdt->wdt_dev)) {
+	if (mtk_wdt->suspend_wdt_running) {
 		mtk_wdt_start(&mtk_wdt->wdt_dev);
 		mtk_wdt_ping(&mtk_wdt->wdt_dev);
+		mtk_wdt->suspend_wdt_running = false;
 	}
 
 	return 0;

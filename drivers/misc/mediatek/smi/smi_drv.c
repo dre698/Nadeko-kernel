@@ -279,6 +279,9 @@ smi_bwl_update(const u32 id, const u32 bwl, const bool soft, const char *user)
 	comm = id >> 16;
 #endif
 	val = (soft ? 0x1000 : 0x3000) | SMI_PMQOS_BWL_MASK(bwl);
+	if (smi_scen_pair[SMI_LARB_NUM + comm][SMI_ESL_INIT][id & 0xffff].val
+		== val)
+		return;
 	smi_scen_pair[SMI_LARB_NUM + comm][SMI_ESL_INIT][id & 0xffff].val = val;
 
 	if (ATOMR_CLK(SMI_LARB_NUM + comm)) {
@@ -310,6 +313,9 @@ void smi_ostd_update(const struct plist_head *head, const char *user)
 			ostd = SMI_OSTD_MAX;
 		else
 			ostd = req->ostd;
+		req->updated = false;
+		if (smi_scen_pair[larb][SMI_ESL_INIT][port].val == ostd)
+			continue;
 		smi_scen_pair[larb][SMI_ESL_INIT][port].val = ostd;
 
 		if (ATOMR_CLK(larb)) {
@@ -318,7 +324,6 @@ void smi_ostd_update(const struct plist_head *head, const char *user)
 				smi_scen_pair[larb][SMI_ESL_INIT][port].off);
 			smi_bus_disable_unprepare(larb, user);
 		}
-		req->updated = false;
 	}
 }
 EXPORT_SYMBOL_GPL(smi_ostd_update);

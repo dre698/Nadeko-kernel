@@ -16,8 +16,9 @@
 
 #include <linux/linkage.h>
 
-#include <asm/cache.h>
 #include <asm/asm-uaccess.h>
+#include <asm/assembler.h>
+#include <asm/cache.h>
 
 /*
  * Copy from user space to a kernel buffer (alignment handled by the hardware)
@@ -65,14 +66,13 @@
 end	.req	x5
 srcin	.req	x15
 ENTRY(__arch_copy_from_user)
-	uaccess_enable_not_uao x3, x4, x5
 	add	end, x0, x2
 	mov	srcin, x1
 #include "copy_template.S"
-	uaccess_disable_not_uao x3, x4
 	mov	x0, #0				// Nothing to copy
 	ret
 ENDPROC(__arch_copy_from_user)
+EXPORT_SYMBOL(__arch_copy_from_user)
 
 	.section .fixup,"ax"
 	.align	2
@@ -82,6 +82,5 @@ ENDPROC(__arch_copy_from_user)
 USER(9998f, ldtrb tmp1w, [srcin])
 	strb	tmp1w, [dst], #1
 9998:	sub	x0, end, dst			// bytes not copied
-	uaccess_disable_not_uao x3, x4
 	ret
 	.previous

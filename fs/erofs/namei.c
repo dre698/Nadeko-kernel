@@ -1,12 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2017-2018 HUAWEI, Inc.
- *             http://www.huawei.com/
- * Created by Gao Xiang <gaoxiang25@huawei.com>
+ *             https://www.huawei.com/
  */
 #include "xattr.h"
 
-#include <trace/events/erofs.h>
 
 struct erofs_qstr {
 	const unsigned char *name;
@@ -219,7 +217,6 @@ static struct dentry *erofs_lookup(struct inode *dir,
 	/* dentry must be unhashed in lookup, no need to worry about */
 	DBG_BUGON(!d_unhashed(dentry));
 
-	trace_erofs_lookup(dir, dentry, flags);
 
 	/* file name exceeds fs limit */
 	if (dentry->d_name.len > EROFS_NAME_LEN)
@@ -235,7 +232,7 @@ static struct dentry *erofs_lookup(struct inode *dir,
 		inode = ERR_PTR(err);
 	} else {
 		erofs_dbg("%s, %s (nid %llu) found, d_type %u", __func__,
-			dentry->d_name.name, nid, d_type);
+			  dentry->d_name.name, nid, d_type);
 		inode = erofs_iget(dir->i_sb, nid, d_type == EROFS_FT_DIR);
 	}
 	return d_splice_alias(inode, dentry);
@@ -244,9 +241,6 @@ static struct dentry *erofs_lookup(struct inode *dir,
 const struct inode_operations erofs_dir_iops = {
 	.lookup = erofs_lookup,
 	.getattr = erofs_getattr,
-#ifdef CONFIG_EROFS_FS_XATTR
 	.listxattr = erofs_listxattr,
-#endif
 	.get_acl = erofs_get_acl,
 };
-

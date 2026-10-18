@@ -183,8 +183,6 @@ int32_t cmdq_sec_init_session_unlocked(struct cmdqSecContextStruct *handle)
 		CMDQ_MSG("[SEC]SESSION_INIT: open new session[%d]\n",
 			handle->state);
 #endif
-		CMDQ_PROF_START(current->pid, "CMDQ_SEC_INIT");
-
 		if (handle->state < IWC_CONTEXT_INITED) {
 			/* open mobicore device */
 #ifdef CMDQ_SECURE_TEE_SUPPORT
@@ -249,8 +247,6 @@ int32_t cmdq_sec_init_session_unlocked(struct cmdqSecContextStruct *handle)
 			break;
 #endif
 		handle->state = IWC_SES_OPENED;
-
-		CMDQ_PROF_END(current->pid, "CMDQ_SEC_INIT");
 	} while (0);
 
 	CMDQ_MSG("[SEC]<--SESSION_INIT[%d], iwcState[%d]\n", status,
@@ -336,7 +332,7 @@ static u64 cmdq_sec_get_secure_engine(u64 engine_flags)
 	CMDQ_ENGINE_TRANS(engine_flags, engine_flags_sec, MDP_WDMA);
 	CMDQ_ENGINE_TRANS(engine_flags, engine_flags_sec, MDP_WROT0);
 	CMDQ_ENGINE_TRANS(engine_flags, engine_flags_sec, MDP_WROT1);
-	engine_flags_sec |= cmdq_mdp_get_func()->mdpGetSecEngine(engine_flags);
+	engine_flags_sec |= cmdq_mdp_get_secure_engine(engine_flags);
 
 	/* DISP engines */
 	CMDQ_ENGINE_TRANS(engine_flags, engine_flags_sec, DISP_RDMA0);
@@ -1022,7 +1018,7 @@ static void cmdq_core_dump_secure_metadata(struct cmdqRecStruct *task)
 
 void cmdq_sec_dump_secure_thread_cookie(s32 thread)
 {
-	if (!cmdq_get_func()->isSecureThread(thread))
+	if (!cmdq_virtual_is_a_secure_thread(thread))
 		return;
 
 	CMDQ_LOG("secure shared cookie:%u wait:%u next:%u count:%u\n",
@@ -1148,9 +1144,6 @@ int32_t cmdq_sec_submit_to_secure_world_async_unlocked(uint32_t iwcCommand,
 	struct cmdqSecContextStruct *handle = NULL;
 	int32_t status = 0;
 	int32_t duration = 0;
-	char long_msg[CMDQ_LONGSTRING_MAX];
-	u32 msg_offset;
-	s32 msg_max_size;
 	char *dispatch_mod = "CMDQ";
 
 	CMDQ_TIME tEntrySec;
@@ -1226,54 +1219,29 @@ int32_t cmdq_sec_submit_to_secure_world_async_unlocked(uint32_t iwcCommand,
 	} while (0);
 
 	if (status == -ETIMEDOUT) {
-		/* t-base strange issue, mc_wait_notification false timeout
-		 * when secure world has done
-		 * because retry may failed, give up retry method
-		 */
-		cmdq_long_string_init(true, long_msg, &msg_offset,
-		&msg_max_size);
-		cmdq_long_string(long_msg, &msg_offset, &msg_max_size,
-			"[SEC]<--SEC_SUBMIT: err[%d][mc_wait_notification timeout], pTask[0x%p], THR[%d],",
-			status, pTask, thread);
-		cmdq_long_string(long_msg, &msg_offset, &msg_max_size,
-			" tgid[%d:%d], config_duration_ms[%d], cmdId[%d]\n",
-			tgid, pid, duration, iwcCommand);
-
-		if (throwAEE)
-			CMDQ_AEE("TEE", "%s", long_msg);
+		pr_err("[SEC]<--SEC_SUBMIT: err[%d][mc_wait_notification timeout], pTask[0x%p], THR[%d], tgid[%d:%d], config_duration_ms[%d], cmdId[%d]\n",
+			status, pTask, thread, tgid, pid, duration, iwcCommand);
+		if (throwAEE) {
+			CMDQ_AEE("TEE", "timeout pTask[0x%p] THR[%d]\n", pTask, thread);
+		}
 
 		cmdq_core_turnon_first_dump(pTask);
 		cmdq_sec_dump_secure_task_status();
-		CMDQ_ERR("%s", long_msg);
 	} else if (status < 0) {
-		cmdq_long_string_init(true, long_msg, &msg_offset,
-			&msg_max_size);
-		cmdq_long_string(long_msg, &msg_offset, &msg_max_size,
-			"[SEC]<--SEC_SUBMIT: err[%d], pTask[0x%p], THR[%d], tgid[%d:%d],",
-			status, pTask, thread, tgid, pid);
-		cmdq_long_string(long_msg, &msg_offset, &msg_max_size,
-			" config_duration_ms[%d], cmdId[%d]\n",
-			duration, iwcCommand);
-
-		if (throwAEE)
-			CMDQ_AEE(dispatch_mod, "%s", long_msg);
+		pr_err("[SEC]<--SEC_SUBMIT: err[%d], pTask[0x%p], THR[%d], tgid[%d:%d], config_duration_ms[%d], cmdId[%d]\n",
+			status, pTask, thread, tgid, pid, duration, iwcCommand);
+		if (throwAEE) {
+			CMDQ_AEE(dispatch_mod, "err[%d] pTask[0x%p] THR[%d]\n", status, pTask, thread);
+		}
 
 		cmdq_core_turnon_first_dump(pTask);
-		CMDQ_ERR("%s", long_msg);
 
 		/* dump metadata first */
 		if (pTask)
 			cmdq_core_dump_secure_metadata(pTask);
 	} else {
-		cmdq_long_string_init(false, long_msg, &msg_offset,
-			&msg_max_size);
-		cmdq_long_string(long_msg, &msg_offset, &msg_max_size,
-			"[SEC]<--SEC_SUBMIT: err[%d], pTask[0x%p], THR[%d], tgid[%d:%d],",
-			status, pTask, thread, tgid, pid);
-		cmdq_long_string(long_msg, &msg_offset, &msg_max_size,
-			" config_duration_ms[%d], cmdId[%d]\n",
-			duration, iwcCommand);
-		CMDQ_MSG("%s", long_msg);
+		pr_debug("[SEC]<--SEC_SUBMIT: err[%d], pTask[0x%p], THR[%d], tgid[%d:%d], config_duration_ms[%d], cmdId[%d]\n",
+			status, pTask, thread, tgid, pid, duration, iwcCommand);
 	}
 	return status;
 }
@@ -1487,7 +1455,7 @@ s32 cmdq_sec_handle_wait_result_impl(struct cmdqRecStruct *handle, s32 thread,
 		 */
 		cmdq_sec_cancel_error_task_unlocked(handle, thread, &result);
 		/* shall we pass the error instru back from secure path?? */
-		module = cmdq_get_func()->parseErrorModule(handle);
+		module = cmdq_virtual_parse_error_module_by_hwflag_impl(handle);
 
 		/* module dump */
 		cmdq_core_attach_error_handle(handle, handle->thread);
@@ -1562,7 +1530,7 @@ s32 cmdq_sec_handle_wait_result(struct cmdqRecStruct *handle, s32 thread)
 
 static s32 cmdq_sec_get_thread_id(s32 scenario)
 {
-	return cmdq_get_func()->getThreadID(scenario, true);
+	return cmdq_virtual_get_thread_index(scenario, true);
 }
 
 /* core controller for secure function */
@@ -1662,7 +1630,7 @@ int32_t cmdq_sec_cancel_error_task_unlocked(
 #ifdef CMDQ_SECURE_PATH_SUPPORT
 	int32_t status = 0;
 
-	if (!pTask || !cmdq_get_func()->isSecureThread(thread) || !pResult) {
+	if (!pTask || !cmdq_virtual_is_a_secure_thread(thread) || !pResult) {
 
 		CMDQ_ERR("%s invalid param, pTask:0x%p thread:%d pResult:%p\n",
 			 __func__, pTask, thread, pResult);
@@ -1732,7 +1700,7 @@ s32 cmdq_sec_get_secure_thread_exec_counter(const s32 thread)
 	u32 *pVA;
 	u32 value;
 
-	if (!cmdq_get_func()->isSecureThread(thread)) {
+	if (!cmdq_virtual_is_a_secure_thread(thread)) {
 		CMDQ_ERR("%s invalid param, thread:%d\n", __func__, thread);
 		return -EFAULT;
 	}
@@ -1894,9 +1862,6 @@ static s32 cmdq_sec_insert_handle_from_thread_array_by_cookie(
 static void cmdq_sec_exec_task_async_impl(struct work_struct *work_item)
 {
 	s32 status;
-	char long_msg[CMDQ_LONGSTRING_MAX];
-	u32 msg_offset;
-	s32 msg_max_size;
 	u32 thread_id;
 	struct cmdq_pkt_buffer *buf;
 	struct cmdq_task *task = container_of(work_item, struct cmdq_task,
@@ -1910,16 +1875,10 @@ static void cmdq_sec_exec_task_async_impl(struct work_struct *work_item)
 	buf = list_first_entry(&handle->pkt->buf, struct cmdq_pkt_buffer,
 		list_entry);
 
-	cmdq_long_string_init(false, long_msg, &msg_offset, &msg_max_size);
-
-	cmdq_long_string(long_msg, &msg_offset, &msg_max_size,
-		"-->EXEC: pkt:0x%p on thread:%d begin va:0x%p\n",
-		handle->pkt, thread_id, buf->va_base);
-	cmdq_long_string(long_msg, &msg_offset, &msg_max_size,
-		" command size:%zu bufferSize:%zu scenario:%d flag:0x%llx\n",
+	pr_debug("-->EXEC: pkt:0x%p on thread:%d begin va:0x%p, command size:%zu bufferSize:%zu scenario:%d flag:0x%llx\n",
+		handle->pkt, thread_id, buf->va_base,
 		handle->pkt->cmd_buf_size, handle->pkt->buf_size,
 		handle->scenario, handle->engineFlag);
-	CMDQ_MSG("%s", long_msg);
 
 	if (!handle->secData.is_secure)
 		CMDQ_ERR("not secure %s", long_msg);

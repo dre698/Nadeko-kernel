@@ -30,6 +30,8 @@
 #include "mtk_battery.h"
 #include "mtk_battery_table.h"
 
+extern bool g_charging_disabled;
+
 
 struct tag_bootmode {
 	u32 size;
@@ -121,6 +123,7 @@ struct mtk_battery *get_mtk_battery(void)
 	}
 
 	gauge = (struct mtk_gauge *)power_supply_get_drvdata(psy);
+	power_supply_put(psy);
 	if (gauge == NULL) {
 		bm_err("[%s]mtk_gauge is not rdy\n", __func__);
 		return NULL;
@@ -183,7 +186,10 @@ bool is_recovery_mode(void)
 	struct mtk_battery *gm;
 
 	gm = get_mtk_battery();
-	bm_debug("%s, bootmdoe = %d\n", gm->bootmode);
+	if (!gm)
+		return false;
+
+	bm_debug("%s: bootmode = %d\n", __func__, gm->bootmode);
 
 	/* RECOVERY_BOOT */
 	if (gm->bootmode == 2)
@@ -197,7 +203,10 @@ bool is_kernel_power_off_charging(void)
 	struct mtk_battery *gm;
 
 	gm = get_mtk_battery();
-	bm_debug("%s, bootmdoe = %d\n", gm->bootmode);
+	if (!gm)
+		return false;
+
+	bm_debug("%s: bootmode = %d\n", __func__, gm->bootmode);
 
 	/* KERNEL_POWER_OFF_CHARGING_BOOT */
 	if (gm->bootmode == 8)
@@ -259,7 +268,10 @@ static int battery_psy_get_property(struct power_supply *psy,
 
 	switch (psp) {
 	case POWER_SUPPLY_PROP_STATUS:
-		val->intval = bs_data->bat_status;
+		if (g_charging_disabled)
+			val->intval = POWER_SUPPLY_STATUS_NOT_CHARGING;
+		else
+			val->intval = bs_data->bat_status;
 		break;
 	case POWER_SUPPLY_PROP_HEALTH:
 		val->intval = bs_data->bat_health;
@@ -384,9 +396,14 @@ static void mtk_battery_external_power_changed(struct power_supply *psy)
 {
 	struct mtk_battery *gm;
 	struct battery_data *bs_data;
-	union power_supply_propval online, status;
-	union power_supply_propval prop_type;
-	int cur_chr_type;
+	union power_supply_propval online = { .intval = 0 };
+	union power_supply_propval status = {
+		.intval = POWER_SUPPLY_STATUS_UNKNOWN
+	};
+	union power_supply_propval prop_type = {
+		.intval = POWER_SUPPLY_USB_TYPE_UNKNOWN
+	};
+	int cur_chr_type = POWER_SUPPLY_USB_TYPE_UNKNOWN;
 
 	struct power_supply *chg_psy = NULL;
 	int ret;
@@ -406,6 +423,10 @@ static void mtk_battery_external_power_changed(struct power_supply *psy)
 
 		ret = power_supply_get_property(chg_psy,
 			POWER_SUPPLY_PROP_STATUS, &status);
+		if (ret < 0)
+			status.intval = online.intval ?
+				POWER_SUPPLY_STATUS_CHARGING :
+				POWER_SUPPLY_STATUS_DISCHARGING;
 
 		if (!online.intval)
 			bs_data->bat_status = POWER_SUPPLY_STATUS_DISCHARGING;
@@ -419,19 +440,23 @@ static void mtk_battery_external_power_changed(struct power_supply *psy)
 			fg_sw_bat_cycle_accu(gm);
 		}
 
-		if (status.intval == POWER_SUPPLY_STATUS_FULL
-			&& gm->b_EOC != true) {
-			bm_err("POWER_SUPPLY_STATUS_FULL\n");
+		if (status.intval == POWER_SUPPLY_STATUS_FULL) {
+			if (!gm->b_EOC) {
+				bm_err("POWER_SUPPLY_STATUS_FULL\n");
+				notify_fg_chr_full(gm);
+			}
 			gm->b_EOC = true;
-			notify_fg_chr_full(gm);
-		} else
+		} else {
 			gm->b_EOC = false;
+		}
 
 		battery_update(gm);
 
 		/* check charger type */
 		ret = power_supply_get_property(chg_psy,
 			POWER_SUPPLY_PROP_USB_TYPE, &prop_type);
+		if (ret < 0)
+			prop_type.intval = POWER_SUPPLY_USB_TYPE_UNKNOWN;
 
 		/* plug in out */
 		cur_chr_type = prop_type.intval;
@@ -760,6 +785,9 @@ int gauge_get_property(enum gauge_property gp,
 		return -ENODEV;
 
 	gauge = (struct mtk_gauge *)power_supply_get_drvdata(psy);
+	power_supply_put(psy);
+	if (gauge == NULL)
+		return -ENODEV;
 	attr = gauge->attr;
 
 	if (attr == NULL) {
@@ -798,6 +826,9 @@ int gauge_set_property(enum gauge_property gp,
 		return -ENODEV;
 
 	gauge = (struct mtk_gauge *)power_supply_get_drvdata(psy);
+	power_supply_put(psy);
+	if (gauge == NULL)
+		return -ENODEV;
 	attr = gauge->attr;
 
 	if (attr == NULL) {
@@ -832,13 +863,13 @@ void fg_custom_init_from_header(struct mtk_battery *gm)
 
 	fgauge_get_profile_id();
 
-	fg_cust_data->versionID1 = FG_DAEMON_CMD_FROM_USER_NUMBER;
+	fg_cust_data->versionID1 = 110;
 	fg_cust_data->versionID2 = sizeof(gm->fg_cust_data);
 	fg_cust_data->versionID3 = FG_KERNEL_CMD_FROM_USER_NUMBER;
 
 	if (gm->gauge != NULL) {
 		gauge_get_property(GAUGE_PROP_HW_VERSION, &version);
-		fg_cust_data->hardwareVersion = version;
+		fg_cust_data->hardwareVersion = 110;
 		fg_cust_data->pl_charger_status =
 			gm->gauge->hw_status.pl_charger_status;
 	}
@@ -2378,20 +2409,6 @@ void fg_drv_update_hw_status(struct mtk_battery *gm)
 	hrtimer_start(&gm->fg_hrtimer, ktime, HRTIMER_MODE_REL);
 }
 
-int battery_update_routine(void *arg)
-{
-	struct mtk_battery *gm = (struct mtk_battery *)arg;
-
-	battery_update_psd(gm);
-	while (1) {
-		bm_err("%s\n", __func__);
-		wait_event(gm->wait_que, (gm->fg_update_flag > 0));
-		gm->fg_update_flag = 0;
-
-		fg_drv_update_hw_status(gm);
-	}
-}
-
 void fg_update_routine_wakeup(struct mtk_battery *gm)
 {
 	bm_err("%s\n", __func__);
@@ -3010,19 +3027,22 @@ int battery_psy_init(struct platform_device *pdev)
 
 	gm->bs_data.chg_psy = devm_power_supply_get_by_phandle(&pdev->dev,
 							 "charger");
-	if (IS_ERR_OR_NULL(gm->bs_data.chg_psy))
+	if (IS_ERR(gm->bs_data.chg_psy)) {
+		if (PTR_ERR(gm->bs_data.chg_psy) == -EPROBE_DEFER)
+			return -EPROBE_DEFER;
 		bm_err("[BAT_probe] %s: fail to get chg_psy !!\n", __func__);
+	}
 
 	battery_service_data_init(gm);
 	gm->bs_data.psy =
-		power_supply_register(
+		devm_power_supply_register(
 			&(pdev->dev), &gm->bs_data.psd, &gm->bs_data.psy_cfg);
 	if (IS_ERR(gm->bs_data.psy)) {
-		bm_err("[BAT_probe] power_supply_register Battery Fail !!\n");
+		bm_err("[BAT_probe] devm_power_supply_register Battery Fail !!\n");
 		ret = PTR_ERR(gm->bs_data.psy);
 		return ret;
 	}
-	bm_err("[BAT_probe] power_supply_register Battery Success !!\n");
+	bm_err("[BAT_probe] devm_power_supply_register Battery Success !!\n");
 	return 0;
 }
 
@@ -3048,6 +3068,7 @@ void fg_check_bootmode(struct device *dev,
 			gm->boottype = tag->boottype;
 		}
 	}
+	of_node_put(boot_node);
 }
 
 void fg_check_lk_swocv(struct device *dev,
@@ -3100,6 +3121,7 @@ void fg_check_lk_swocv(struct device *dev,
 
 	bm_err("swocv_v:%d swocv_i:%d shutdown_time:%d\n",
 		gm->ptim_lk_v, gm->ptim_lk_i, gm->pl_shutdown_time);
+	of_node_put(boot_node);
 }
 
 
@@ -3149,7 +3171,6 @@ int battery_init(struct platform_device *pdev)
 	INIT_WORK(&gm->sw_uisoc_timer_work, sw_uisoc_timer_work_handler);
 
 
-	kthread_run(battery_update_routine, gm, "battery_thread");
 	fg_drv_thread_hrtimer_init(gm);
 	battery_sysfs_create_group(gm->bs_data.psy);
 	gm->is_probe_done = true;
@@ -3171,4 +3192,3 @@ int battery_init(struct platform_device *pdev)
 
 	return 0;
 }
-

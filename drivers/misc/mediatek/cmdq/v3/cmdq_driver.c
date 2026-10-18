@@ -38,9 +38,6 @@
 #include <linux/suspend.h>
 #include <linux/soc/mediatek/mtk-cmdq.h>
 #include <linux/sched/clock.h>
-#ifdef CMDQ_USE_LEGACY
-#include <mach/mt_boot.h>
-#endif
 
 /*
  * @device tree porting note
@@ -1200,9 +1197,6 @@ static int cmdq_probe(struct platform_device *pDevice)
 
 	CMDQ_LOG("CMDQ driver probe begin\n");
 
-	/* Function link */
-	cmdq_virtual_function_setting();
-
 	/* init cmdq device related data */
 	cmdq_dev_init(pDevice);
 
@@ -1332,22 +1326,17 @@ late_initcall(mdp_late_init);
 static int __init cmdq_init(void)
 {
 	int status;
-	struct cmdqMDPFuncStruct *mdp_func = cmdq_mdp_get_func();
 
 	CMDQ_LOG("%s CMDQ driver init begin\n", __func__);
 
-	/* MDP function link */
-	cmdq_mdp_virtual_function_setting();
-	cmdq_mdp_platform_function_setting();
-
 	/* Register VENC callback */
-	cmdqCoreRegisterCB(CMDQ_GROUP_VENC, NULL, mdp_func->vEncDumpInfo,
+	cmdqCoreRegisterCB(CMDQ_GROUP_VENC, NULL, cmdqVEncDumpInfo,
 		NULL, NULL);
 
 	/* Register PMQoS */
 	cmdq_core_register_task_cycle_cb(CMDQ_GROUP_MDP,
-			cmdq_mdp_get_func()->beginTask,
-			cmdq_mdp_get_func()->endTask);
+			cmdq_mdp_begin_task_virtual,
+			cmdq_mdp_end_task_virtual);
 
 	status = platform_driver_register(&gCmdqDriver);
 	if (status != 0) {

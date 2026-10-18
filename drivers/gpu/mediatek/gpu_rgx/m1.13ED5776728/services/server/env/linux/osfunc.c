@@ -245,7 +245,7 @@ PVRSRV_ERROR OSPhyContigPagesAlloc(PVRSRV_DEVICE_NODE *psDevNode, size_t uiSize,
 void OSPhyContigPagesFree(PVRSRV_DEVICE_NODE *psDevNode, PG_HANDLE *psMemHandle)
 {
 	struct page *psPage = (struct page*) psMemHandle->u.pvHandle;
-	IMG_UINT32	uiPageCount=0, ui32Order;
+	IMG_UINT32	uiPageCount=0, ui32Order; (void)uiPageCount;
 
 	ui32Order = psMemHandle->uiOrder;
 	uiPageCount = (1 << ui32Order);
@@ -1539,7 +1539,7 @@ PVRSRV_ERROR OSChangeSparseMemCPUAddrMap(void **psPageArray,
 	}
 
 	/* Acquire the memory sem */
-	down_write(&psMM->mmap_sem);
+	mmap_write_lock(psMM);
 
 	psMapping = psVMA->vm_file->f_mapping;
 
@@ -1664,7 +1664,7 @@ PVRSRV_ERROR OSChangeSparseMemCPUAddrMap(void **psPageArray,
 
 	eError = PVRSRV_OK;
 eFailed:
-	up_write(&psMM->mmap_sem);
+	mmap_write_unlock(psMM);
 
 	return eError;
 }

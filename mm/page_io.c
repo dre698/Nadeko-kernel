@@ -25,7 +25,7 @@
 #include <linux/psi.h>
 #include <linux/uio.h>
 #include <linux/sched/task.h>
-#include <asm/pgtable.h>
+#include <linux/pgtable.h>
 
 static struct bio *get_swap_bio(gfp_t gfp_flags,
 				struct page *page, bio_end_io_t end_io)
@@ -63,8 +63,9 @@ void end_swap_bio_write(struct bio *bio)
 		 * Also clear PG_reclaim to avoid rotate_reclaimable_page()
 		 */
 		set_page_dirty(page);
-		pr_alert("Write-error on swap-device (%u:%u:%llu)\n",
-			 MAJOR(bio_dev(bio)), MINOR(bio_dev(bio)),
+		pr_alert_ratelimited("Write-error on swap-device (%u:%u:%llu)\n",
+			 MAJOR(bio_dev(bio)),
+			 MINOR(bio_dev(bio)),
 			 (unsigned long long)bio->bi_iter.bi_sector);
 		ClearPageReclaim(page);
 	}
@@ -128,8 +129,9 @@ int generic_swapfile_activate(struct swap_info_struct *sis,
 
 		cond_resched();
 
-		first_block = bmap(inode, probe_block);
-		if (first_block == 0)
+		first_block = probe_block;
+		ret = bmap(inode, &first_block);
+		if (ret || !first_block)
 			goto bad_bmap;
 
 		/*
@@ -144,9 +146,11 @@ int generic_swapfile_activate(struct swap_info_struct *sis,
 					block_in_page++) {
 			sector_t block;
 
-			block = bmap(inode, probe_block + block_in_page);
-			if (block == 0)
+			block = probe_block + block_in_page;
+			ret = bmap(inode, &block);
+			if (ret || !block)
 				goto bad_bmap;
+
 			if (block != first_block + block_in_page) {
 				/* Discontiguity */
 				probe_block++;
@@ -189,32 +193,6 @@ bad_bmap:
 	goto out;
 }
 
-static bool swap_sched_async_compress(struct page *page)
-{
-	struct swap_info_struct *sis;
-	pg_data_t *pgdat = NODE_DATA(nid);
-
-	if (unlikely(!pgdat->kcompressd))
-		return false;
-
-	if (!current_is_kswapd())
-		return false;
-
-	if (!PageAnon(page))
-		return false;
-
-	sis = page_swap_info(page);
-	if (data_race(sis->flags & SWP_SYNCHRONOUS_IO)) {
-		if (kfifo_avail(&pgdat->kcompress_fifo) >= sizeof(page) &&
-			kfifo_in(&pgdat->kcompress_fifo, &page, sizeof(page))) {
-			wake_up_interruptible(&pgdat->kcompressd_wait);
-			return true;
-		}
-	}
-
-	return false;
-}
-
 /*
  * We may have stale swap cache pages in memory: notice
  * them here and get rid of the unnecessary final write.
@@ -233,15 +211,6 @@ int swap_writepage(struct page *page, struct writeback_control *wbc)
 		end_page_writeback(page);
 		goto out;
 	}
-
-	/*
-	 * Compression within zswap and zram might block rmap, unmap
-	 * of both file and anon pages, try to do compression async
-	 * if possible
-	 */
-	if (swap_sched_async_compress(page))
-		return 0;
-
 	ret = __swap_writepage(page, wbc, end_swap_bio_write);
 out:
 	return ret;
@@ -264,9 +233,8 @@ int kcompressd(void *p)
 				!kfifo_is_empty(&pgdat->kcompress_fifo));
 
 		while (!kfifo_is_empty(&pgdat->kcompress_fifo)) {
-			if (kfifo_out(&pgdat->kcompress_fifo, &page, sizeof(page))) {
+			if (kfifo_out(&pgdat->kcompress_fifo, &page, sizeof(page)))
 				__swap_writepage(page, &wbc, end_swap_bio_write);
-			}
 		}
 	}
 	return 0;
@@ -337,11 +305,13 @@ int __swap_writepage(struct page *page, struct writeback_control *wbc,
 		return 0;
 	}
 
+	ret = 0;
 	bio = get_swap_bio(GFP_NOIO, page, end_write_func);
 	if (bio == NULL) {
 		set_page_dirty(page);
 		unlock_page(page);
-		return -ENOMEM;
+		ret = -ENOMEM;
+		goto out;
 	}
 	bio->bi_opf = REQ_OP_WRITE | REQ_SWAP | wbc_to_write_flags(wbc);
 	bio_associate_blkcg_from_page(bio, page);
@@ -349,8 +319,8 @@ int __swap_writepage(struct page *page, struct writeback_control *wbc,
 	set_page_writeback(page);
 	unlock_page(page);
 	submit_bio(bio);
-
-	return 0;
+out:
+	return ret;
 }
 
 int swap_readpage(struct page *page, bool synchronous)
@@ -389,10 +359,12 @@ int swap_readpage(struct page *page, bool synchronous)
 		goto out;
 	}
 
-	ret = bdev_read_page(sis->bdev, map_swap_page(page, &sis->bdev), page);
-	if (!ret) {
-		count_vm_event(PSWPIN);
-		goto out;
+	if (sis->flags & SWP_SYNCHRONOUS_IO) {
+		ret = bdev_read_page(sis->bdev, map_swap_page(page, &sis->bdev), page);
+		if (!ret) {
+			count_vm_event(PSWPIN);
+			goto out;
+		}
 	}
 
 	ret = 0;

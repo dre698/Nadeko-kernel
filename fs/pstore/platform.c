@@ -113,12 +113,8 @@ static const char *get_reason_str(enum kmsg_dump_reason reason)
 		return "Oops";
 	case KMSG_DUMP_EMERG:
 		return "Emergency";
-	case KMSG_DUMP_RESTART:
-		return "Restart";
-	case KMSG_DUMP_HALT:
-		return "Halt";
-	case KMSG_DUMP_POWEROFF:
-		return "Poweroff";
+	case KMSG_DUMP_SHUTDOWN:
+		return "Shutdown";
 	default:
 		return "Unknown";
 	}
@@ -199,7 +195,7 @@ static int zbufsize_842(size_t size)
 #if IS_ENABLED(CONFIG_PSTORE_ZSTD_COMPRESS)
 static int zbufsize_zstd(size_t size)
 {
-	return ZSTD_compressBound(size);
+	return zstd_compress_bound(size);
 }
 #endif
 

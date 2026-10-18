@@ -8,10 +8,11 @@
 #include <linux/module.h>
 #include <net/sock.h>
 #include <linux/kernel.h>
+#include <linux/kconfig.h>
 #include <linux/tcp.h>
 #include <linux/workqueue.h>
 #include <linux/nospec.h>
-
+#include <linux/cookie.h>
 #include <linux/inet_diag.h>
 #include <linux/sock_diag.h>
 
@@ -20,14 +21,16 @@ static int (*inet_rcv_compat)(struct sk_buff *skb, struct nlmsghdr *nlh);
 static DEFINE_MUTEX(sock_diag_table_mutex);
 static struct workqueue_struct *broadcast_wq;
 
-u64 sock_gen_cookie(struct sock *sk)
+DEFINE_COOKIE(sock_cookie);
+
+u64 __sock_gen_cookie(struct sock *sk)
 {
 	while (1) {
 		u64 res = atomic64_read(&sk->sk_cookie);
 
 		if (res)
 			return res;
-		res = atomic64_inc_return(&sock_net(sk)->cookie_gen);
+		res = gen_cookie_next(&sock_cookie);
 		atomic64_cmpxchg(&sk->sk_cookie, 0, res);
 	}
 }
@@ -208,6 +211,50 @@ void sock_diag_unregister(const struct sock_diag_handler *hnld)
 }
 EXPORT_SYMBOL_GPL(sock_diag_unregister);
 
+#if !IS_ENABLED(CONFIG_INET_DIAG)
+static int sock_diag_empty_dump(struct sk_buff *skb, struct netlink_callback *cb)
+{
+	return 0;
+}
+
+static int sock_diag_empty_inet_dump(struct sk_buff *skb, struct nlmsghdr *nlh)
+{
+	struct netlink_dump_control c = {
+		.dump = sock_diag_empty_dump,
+	};
+	struct net *net = sock_net(skb->sk);
+
+	if (!(nlh->nlmsg_flags & NLM_F_DUMP))
+		return -ENOENT;
+
+	return netlink_dump_start(net->diag_nlsk, skb, nlh, &c);
+}
+
+static const struct sock_diag_handler sock_diag_empty_inet_handler = {
+	.family = AF_INET,
+	.dump = sock_diag_empty_inet_dump,
+};
+
+#if IS_ENABLED(CONFIG_IPV6)
+static const struct sock_diag_handler sock_diag_empty_inet6_handler = {
+	.family = AF_INET6,
+	.dump = sock_diag_empty_inet_dump,
+};
+#endif
+
+static void __init sock_diag_register_empty_inet(void)
+{
+	sock_diag_register(&sock_diag_empty_inet_handler);
+#if IS_ENABLED(CONFIG_IPV6)
+	sock_diag_register(&sock_diag_empty_inet6_handler);
+#endif
+}
+#else
+static inline void sock_diag_register_empty_inet(void)
+{
+}
+#endif
+
 static int __sock_diag_cmd(struct sk_buff *skb, struct nlmsghdr *nlh)
 {
 	int err;
@@ -330,8 +377,16 @@ static struct pernet_operations diag_net_ops = {
 
 static int __init sock_diag_init(void)
 {
+	int err;
+
 	broadcast_wq = alloc_workqueue("sock_diag_events", 0, 0);
 	BUG_ON(!broadcast_wq);
-	return register_pernet_subsys(&diag_net_ops);
+
+	err = register_pernet_subsys(&diag_net_ops);
+	if (err)
+		return err;
+
+	sock_diag_register_empty_inet();
+	return 0;
 }
 device_initcall(sock_diag_init);

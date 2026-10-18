@@ -50,7 +50,8 @@ struct fib6_config {
 	u32		fc_protocol;
 	u16		fc_type;        /* only 8 bits are used */
 	u16		fc_delete_all_nh : 1,
-			__unused : 15;
+			fc_ignore_dev_down:1,
+			__unused : 14;
 
 	struct in6_addr	fc_dst;
 	struct in6_addr	fc_src;
@@ -422,6 +423,11 @@ static inline struct net_device *fib6_info_nh_dev(const struct fib6_info *f6i)
 	return f6i->fib6_nh.nh_dev;
 }
 
+int fib6_nh_init(struct net *net, struct fib6_nh *fib6_nh,
+		 struct fib6_config *cfg, gfp_t gfp_flags,
+		 struct netlink_ext_ack *extack);
+void fib6_nh_release(struct fib6_nh *fib6_nh);
+
 static inline
 struct lwtunnel_state *fib6_info_nh_lwt(const struct fib6_info *f6i)
 {
@@ -467,6 +473,13 @@ static inline bool fib6_metric_locked(struct fib6_info *f6i, int metric)
 {
 	return !!(f6i->fib6_metrics->metrics[RTAX_LOCK - 1] & (1 << metric));
 }
+
+#if IS_BUILTIN(CONFIG_IPV6) && defined(CONFIG_BPF_SYSCALL)
+struct bpf_iter__ipv6_route {
+	__bpf_md_ptr(struct bpf_iter_meta *, meta);
+	__bpf_md_ptr(struct fib6_info *, rt);
+};
+#endif
 
 #ifdef CONFIG_IPV6_MULTIPLE_TABLES
 int fib6_rules_init(void);

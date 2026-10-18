@@ -117,9 +117,9 @@ struct old_linux_dirent {
 };
 
 struct readdir_callback {
-    struct dir_context ctx;
-    struct old_linux_dirent __user * dirent;
-    int result;
+	struct dir_context ctx;
+	struct old_linux_dirent __user * dirent;
+	int result;
 };
 
 static int fillonedir(struct dir_context *ctx, const char *name, int namlen,
@@ -170,6 +170,7 @@ SYSCALL_DEFINE3(old_readdir, unsigned int, fd,
 
 	if (!f.file)
 		return -EBADF;
+
 	error = iterate_dir(f.file, &buf.ctx);
 	if (buf.result)
 		error = buf.result;
@@ -266,6 +267,7 @@ SYSCALL_DEFINE3(getdents, unsigned int, fd,
 	f = fdget_pos(fd);
 	if (!f.file)
 		return -EBADF;
+
 	error = iterate_dir(f.file, &buf.ctx);
 	if (error >= 0)
 		error = buf.error;
@@ -281,11 +283,11 @@ SYSCALL_DEFINE3(getdents, unsigned int, fd,
 }
 
 struct getdents_callback64 {
-    struct dir_context ctx;
-    struct linux_dirent64 __user * current_dir;
-    struct linux_dirent64 __user * previous;
-    int count;
-    int error;
+	struct dir_context ctx;
+	struct linux_dirent64 __user * current_dir;
+	struct linux_dirent64 __user * previous;
+	int count;
+	int error;
 };
 
 static int filldir64(struct dir_context *ctx, const char *name, int namlen,
@@ -351,6 +353,7 @@ int ksys_getdents64(unsigned int fd, struct linux_dirent64 __user *dirent,
 	f = fdget_pos(fd);
 	if (!f.file)
 		return -EBADF;
+
 	error = iterate_dir(f.file, &buf.ctx);
 	if (error >= 0)
 		error = buf.error;
@@ -436,6 +439,7 @@ COMPAT_SYSCALL_DEFINE3(old_readdir, unsigned int, fd,
 
 	if (!f.file)
 		return -EBADF;
+
 	error = iterate_dir(f.file, &buf.ctx);
 	if (buf.result)
 		error = buf.result;
@@ -523,6 +527,7 @@ COMPAT_SYSCALL_DEFINE3(getdents, unsigned int, fd,
 	f = fdget_pos(fd);
 	if (!f.file)
 		return -EBADF;
+
 	error = iterate_dir(f.file, &buf.ctx);
 	if (error >= 0)
 		error = buf.error;

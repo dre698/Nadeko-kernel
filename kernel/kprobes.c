@@ -229,7 +229,7 @@ static int collect_garbage_slots(struct kprobe_insn_cache *c)
 	struct kprobe_insn_page *kip, *next;
 
 	/* Ensure no-one is interrupted on the garbages */
-	synchronize_sched();
+	synchronize_rcu();
 
 	list_for_each_entry_safe(kip, next, &c->pages, list) {
 		int i;
@@ -907,7 +907,7 @@ static void unoptimize_all_kprobes(void)
 static DEFINE_MUTEX(kprobe_sysctl_mutex);
 int sysctl_kprobes_optimization;
 int proc_kprobes_optimization_handler(struct ctl_table *table, int write,
-				      void __user *buffer, size_t *length,
+				      void *buffer, size_t *length,
 				      loff_t *ppos)
 {
 	int ret;
@@ -1440,7 +1440,7 @@ out:
 			if (ret) {
 				ap->flags |= KPROBE_FLAG_DISABLED;
 				list_del_rcu(&p->list);
-				synchronize_sched();
+				synchronize_rcu();
 			}
 		}
 	}
@@ -1664,7 +1664,7 @@ int register_kprobe(struct kprobe *p)
 		ret = arm_kprobe(p);
 		if (ret) {
 			hlist_del_rcu(&p->hlist);
-			synchronize_sched();
+			synchronize_rcu();
 			goto out;
 		}
 	}
@@ -1845,7 +1845,7 @@ void unregister_kprobes(struct kprobe **kps, int num)
 			kps[i]->addr = NULL;
 	mutex_unlock(&kprobe_mutex);
 
-	synchronize_sched();
+	synchronize_rcu();
 	for (i = 0; i < num; i++)
 		if (kps[i]->addr)
 			__unregister_kprobe_bottom(kps[i]);
@@ -2058,7 +2058,7 @@ void unregister_kretprobes(struct kretprobe **rps, int num)
 			rps[i]->kp.addr = NULL;
 	mutex_unlock(&kprobe_mutex);
 
-	synchronize_sched();
+	synchronize_rcu();
 	for (i = 0; i < num; i++) {
 		if (rps[i]->kp.addr) {
 			__unregister_kprobe_bottom(&rps[i]->kp);

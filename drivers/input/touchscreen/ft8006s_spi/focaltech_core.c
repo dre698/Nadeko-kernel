@@ -64,13 +64,6 @@
 #define FTS_I2C_VTG_MAX_UV                  1800000
 #endif
 
-//enable 'check touch vendor' feature
-#define CHECK_TOUCH_VENDOR
-
-#ifdef CHECK_TOUCH_VENDOR
-extern char mtkfb_lcm_name[256];
-#endif
-
 #if LCT_TP_USB_PLUGIN
 static void fts_ts_usb_plugin_work_func(struct work_struct *work);
 DECLARE_WORK(fts_usb_plugin_work, fts_ts_usb_plugin_work_func);
@@ -671,6 +664,7 @@ static irqreturn_t fts_irq_handler(int irq, void *data)
 {
 
     int ret = 0;
+#ifdef CONFIG_PM
     if (fts_data->dev_pm_suspend && fts_data->gesture_mode) {
         ret = wait_for_completion_timeout(&fts_data->dev_pm_suspend_completion, msecs_to_jiffies(700));
         if (!ret) {
@@ -678,6 +672,7 @@ static irqreturn_t fts_irq_handler(int irq, void *data)
             return IRQ_HANDLED;
         }
     }
+#endif
 
     fts_irq_read_report();
     return IRQ_HANDLED;
@@ -1679,7 +1674,9 @@ static int fts_ts_probe(struct spi_device *spi)
     ts_data->dev_pm_suspend = false;
     init_completion(&ts_data->dev_pm_suspend_completion);
 #endif
+#ifdef CONFIG_PM
     pm_runtime_enable(ts_data->dev);
+#endif
 
     FTS_INFO("Touch Screen(SPI BUS) driver prboe successfully");
     return 0;
@@ -1748,24 +1745,6 @@ static int __init fts_ts_init(void)
     int ret = 0;
 
     FTS_FUNC_ENTER();
-
-#ifdef CHECK_TOUCH_VENDOR
-    //Check TP vendor
-    if (IS_ERR_OR_NULL(mtkfb_lcm_name)){
-        FTS_ERROR("mtkfb_lcm_name ERROR!");
-        return -ENOMEM;
-    } else if (strcmp(mtkfb_lcm_name,"ft8006s_vdo_hdp_boe_helitai_drv") == 0) {
-            FTS_INFO("TP info: [Vendor]helitai [IC]ft8006s");
-    } else if (strcmp(mtkfb_lcm_name, "ft8006s_ab_vdo_hdp_boe_helitai_drv") == 0) {
-	    FTS_INFO("Registered touch driver;	[IC]: ft8006s_ab	[VENDOR]: helitai");
-    } else if (strcmp(mtkfb_lcm_name, "ft8006s_ac_vdo_hdp_boe_helitai_drv") == 0) {
-	    FTS_INFO("Registered touch driver;	[IC]: ft8006s_ac	[VENDOR]: helitai");
-        } else {
-            FTS_ERROR("Unknow Touch");
-            return -ENODEV;
-    }
-
-#endif
 
     ret = spi_register_driver(&fts_ts_driver);
     if ( ret != 0 ) {

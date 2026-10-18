@@ -350,7 +350,7 @@ static int inotify_find_inode(const char __user *dirname, struct path *path, uns
 	if (error)
 		return error;
 	/* you can only watch an inode if you have read permissions on it */
-	error = inode_permission2(path->mnt, path->dentry->d_inode, MAY_READ);
+	error = inode_permission(path->dentry->d_inode, MAY_READ);
 	if (error)
 		path_put(path);
 	return error;
@@ -593,6 +593,7 @@ static int inotify_new_watch(struct fsnotify_group *group,
 	if (ret) {
 		/* we failed to get on the inode, get off the idr */
 		inotify_remove_from_idr(group, tmp_i_mark);
+		dec_inotify_watches(group->inotify_data.ucounts);
 		goto out_err;
 	}
 
@@ -702,7 +703,7 @@ SYSCALL_DEFINE3(inotify_add_watch, int, fd, const char __user *, pathname,
 	struct fsnotify_group *group;
 	struct inode *inode;
 	struct path path;
-	struct path alteredpath;
+	struct path alteredpath = {0};
 	struct path *canonical_path = &path;
 	struct fd f;
 	int ret;
@@ -750,9 +751,16 @@ SYSCALL_DEFINE3(inotify_add_watch, int, fd, const char __user *, pathname,
 		goto fput_and_out;
 
 	/* support stacked filesystems */
-	if(path.dentry && path.dentry->d_op) {
+	if (path.dentry && path.dentry->d_op) {
 		if (path.dentry->d_op->d_canonical_path) {
-			path.dentry->d_op->d_canonical_path(&path, &alteredpath);
+			path.dentry->d_op->d_canonical_path(&path,
+							    &alteredpath);
+
+			if (IS_ERR(alteredpath.dentry)) {
+				ret = PTR_ERR(alteredpath.dentry);
+				goto path_put_and_out;
+			}
+
 			canonical_path = &alteredpath;
 			path_put(&path);
 		}
@@ -764,6 +772,7 @@ SYSCALL_DEFINE3(inotify_add_watch, int, fd, const char __user *, pathname,
 
 	/* create/update an inode mark */
 	ret = inotify_update_watch(group, inode, mask);
+path_put_and_out:
 	path_put(canonical_path);
 fput_and_out:
 	fdput(f);
@@ -831,7 +840,7 @@ static int __init inotify_user_setup(void)
 	BUILD_BUG_ON(IN_ISDIR != FS_ISDIR);
 	BUILD_BUG_ON(IN_ONESHOT != FS_IN_ONESHOT);
 
-	BUG_ON(hweight32(ALL_INOTIFY_BITS) != 22);
+	BUILD_BUG_ON(HWEIGHT32(ALL_INOTIFY_BITS) != 22);
 
 	inotify_inode_mark_cachep = KMEM_CACHE(inotify_inode_mark,
 					       SLAB_PANIC|SLAB_ACCOUNT);

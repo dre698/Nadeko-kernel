@@ -5,6 +5,7 @@
 
 #define pr_fmt(fmt) "simple_lmk: " fmt
 
+#include <linux/delay.h>
 #include <linux/freezer.h>
 #include <linux/kthread.h>
 #include <linux/mm.h>
@@ -14,7 +15,6 @@
 #include <linux/sort.h>
 #include <linux/vmpressure.h>
 #include <uapi/linux/sched/types.h>
-#include <linux/export.h>
 
 /* The minimum number of pages to free per reclaim */
 static unsigned short slmk_minfree __read_mostly = CONFIG_ANDROID_SIMPLE_LMK_MINFREE;
@@ -36,7 +36,8 @@ struct victim_info {
 };
 
 static struct victim_info victims[MAX_VICTIMS] __cacheline_aligned_in_smp;
-static struct task_struct *task_bucket[SHRT_MAX + 1] __cacheline_aligned;
+static struct task_struct *task_bucket[OOM_SCORE_ADJ_MAX + 1]
+	__cacheline_aligned;
 static DECLARE_WAIT_QUEUE_HEAD(oom_waitq);
 static DECLARE_WAIT_QUEUE_HEAD(reaper_waitq);
 static DECLARE_COMPLETION(reclaim_done);
@@ -76,7 +77,7 @@ static unsigned long get_total_mm_pages(struct mm_struct *mm)
 
 static unsigned long find_victims(int *vindex)
 {
-	short i, min_adj = SHRT_MAX, max_adj = 0;
+	short i, min_adj = OOM_SCORE_ADJ_MAX, max_adj = 0;
 	unsigned long pages_found = 0;
 	struct task_struct *tsk;
 
@@ -203,6 +204,12 @@ static void set_task_rt_prio(struct task_struct *tsk, int priority)
 	sched_setscheduler_nocheck(tsk, SCHED_RR, &rt_prio);
 }
 
+#if defined(CONFIG_HZ_100) || defined(CONFIG_HZ_300)
+#define SLEEP_DURATION_MS 30
+#else
+#define SLEEP_DURATION_MS 28
+#endif
+
 static void scan_and_kill(void)
 {
 	int i, nr_to_kill, nr_found = 0;
@@ -284,13 +291,13 @@ static void scan_and_kill(void)
 			set_tsk_thread_flag(t, TIF_MEMDIE);
 		for_each_thread(vtsk, t)
 			set_task_rt_prio(t, 1);
+		/* Signals can't wake frozen tasks; only a thaw operation can */
+		for_each_thread(vtsk, t)
+			__thaw_task(t);
 		rcu_read_unlock();
 
 		/* Allow the victim to run on any CPU. This won't schedule. */
 		set_cpus_allowed_ptr(vtsk, cpu_all_mask);
-
-		/* Signals can't wake frozen tasks; only a thaw operation can */
-		__thaw_task(vtsk);
 
 		/* Store the number of anon pages to sort victims for reaping */
 		victim->size = get_mm_counter(mm, MM_ANONPAGES);
@@ -315,6 +322,8 @@ static void scan_and_kill(void)
 	/* Wait until all the victims die or until the timeout is reached */
 	if (!wait_for_completion_timeout(&reclaim_done, RECLAIM_EXPIRES))
 		pr_info("Timeout hit waiting for victims to die, proceeding\n");
+	else
+		msleep(SLEEP_DURATION_MS);
 
 	/* Clean up for future reclaims but let the reaper thread keep going */
 	write_lock(&mm_free_lock);
@@ -354,7 +363,7 @@ static struct mm_struct *next_reap_victim(void)
 			continue;
 
 		/* Do a trylock so the reaper thread doesn't sleep */
-		if (!down_read_trylock(&mm->mmap_sem)) {
+		if (!mmap_read_trylock(mm)) {
 			should_retry = true;
 			continue;
 		}
@@ -370,7 +379,7 @@ static struct mm_struct *next_reap_victim(void)
 		 */
 		if (!test_bit(MMF_OOM_SKIP, &mm->flags))
 			break;
-		up_read(&mm->mmap_sem);
+		mmap_read_unlock(mm);
 	}
 
 	if (!mm) {
@@ -409,7 +418,7 @@ static void reap_victims(void)
 			clear_bit(MMF_OOM_VICTIM, &mm->flags);
 			set_bit(MMF_OOM_SKIP, &mm->flags);
 		}
-		up_read(&mm->mmap_sem);
+		mmap_read_unlock(mm);
 	}
 }
 
@@ -457,12 +466,14 @@ void simple_lmk_mm_freed(struct mm_struct *mm)
 	}
 	read_unlock(&mm_free_lock);
 }
-EXPORT_SYMBOL(simple_lmk_mm_freed);
+
+static unsigned short slmk_vmpressure __read_mostly = 95;
+module_param(slmk_vmpressure, short, 0644);
 
 static int simple_lmk_vmpressure_cb(struct notifier_block *nb,
 				    unsigned long pressure, void *data)
 {
-	if (pressure == 100) {
+	if (pressure >= slmk_vmpressure) {
 		atomic_set(&needs_reclaim, 1);
 		smp_mb__after_atomic();
 		if (waitqueue_active(&oom_waitq))
@@ -482,6 +493,7 @@ static int simple_lmk_init_set(const char *val, const struct kernel_param *kp)
 {
 	static atomic_t init_done = ATOMIC_INIT(0);
 	struct task_struct *thread;
+	unsigned long total_mb = 0;
 
 	if (!atomic_cmpxchg(&init_done, 0, 1)) {
 		thread = kthread_run(simple_lmk_reaper_thread, NULL,
@@ -493,6 +505,19 @@ static int simple_lmk_init_set(const char *val, const struct kernel_param *kp)
 		BUG_ON(vmpressure_notifier_register(&vmpressure_notif));
 	}
 
+	total_mb = totalram_pages() >> (20 - PAGE_SHIFT);
+	if (total_mb > 3072) {
+		// 4GB+ variant
+		slmk_minfree = 155;
+		slmk_timeout = 145;
+	} else {
+		// 3GB or lower
+		slmk_minfree = 256;
+		slmk_timeout = 200;
+	}
+
+	pr_info_once("Detected %lu megabytes of device RAM, setting minfree to %hu with timeout of %hu\n",
+		total_mb, slmk_minfree, slmk_timeout);
 	return 0;
 }
 

@@ -349,7 +349,8 @@ void ion_heap_init_shrinker(struct ion_heap *heap)
 {
 	heap->shrinker.count_objects = ion_heap_shrink_count;
 	heap->shrinker.scan_objects = ion_heap_shrink_scan;
-	heap->shrinker.seeks = DEFAULT_SEEKS;
+	/* ION pools contain clean pages, so prefer them over mapped memory. */
+	heap->shrinker.seeks = 1;
 	heap->shrinker.batch = 0;
 	register_shrinker(&heap->shrinker);
 }
@@ -370,11 +371,23 @@ struct ion_heap *ion_heap_create(struct ion_platform_heap *heap_data)
 		heap = ion_carveout_heap_create(heap_data);
 		break;
 	case ION_HEAP_TYPE_CHUNK:
+#if IS_ENABLED(CONFIG_ION_CHUNK_HEAP)
 		heap = ion_chunk_heap_create(heap_data);
 		break;
+#else
+		ion_debug("%s: Heap type is disabled: %d\n",
+			  __func__, heap_data->type);
+		return ERR_PTR(-EINVAL);
+#endif
 	case ION_HEAP_TYPE_DMA:
+#if IS_ENABLED(CONFIG_ION_CMA_HEAP)
 		heap = ion_cma_heap_create(heap_data);
 		break;
+#else
+		ion_debug("%s: Heap type is disabled: %d\n",
+			  __func__, heap_data->type);
+		return ERR_PTR(-EINVAL);
+#endif
 	default:
 		ion_debug("%s: Invalid heap type %d\n",
 			  __func__, heap_data->type);
@@ -414,10 +427,20 @@ void ion_heap_destroy(struct ion_heap *heap)
 		ion_carveout_heap_destroy(heap);
 		break;
 	case ION_HEAP_TYPE_CHUNK:
+#if IS_ENABLED(CONFIG_ION_CHUNK_HEAP)
 		ion_chunk_heap_destroy(heap);
+#else
+		IONMSG("%s: Heap type is disabled: %d\n",
+		       __func__, heap->type);
+#endif
 		break;
 	case ION_HEAP_TYPE_DMA:
+#if IS_ENABLED(CONFIG_ION_CMA_HEAP)
 		ion_cma_heap_destroy(heap);
+#else
+		IONMSG("%s: Heap type is disabled: %d\n",
+		       __func__, heap->type);
+#endif
 		break;
 	default:
 		IONMSG("%s: Invalid heap type %d\n", __func__,

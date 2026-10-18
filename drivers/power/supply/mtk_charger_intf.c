@@ -64,9 +64,9 @@
 
 int get_uisoc(struct mtk_charger *info)
 {
-	union power_supply_propval prop;
+	union power_supply_propval prop = {0};
 	struct power_supply *bat_psy = NULL;
-	int ret;
+	int ret = 50, res;
 
 	bat_psy = info->bat_psy;
 
@@ -80,8 +80,10 @@ int get_uisoc(struct mtk_charger *info)
 		chr_err("%s Couldn't get bat_psy\n", __func__);
 		ret = 50;
 	} else {
-		ret = power_supply_get_property(bat_psy,
+		res = power_supply_get_property(bat_psy,
 			POWER_SUPPLY_PROP_CAPACITY, &prop);
+		if (res < 0)
+			return res;
 		ret = prop.intval;
 	}
 
@@ -258,9 +260,9 @@ bool is_battery_exist(struct mtk_charger *info)
 
 bool is_charger_exist(struct mtk_charger *info)
 {
-	union power_supply_propval prop;
-	static struct power_supply *chg_psy;
-	int ret;
+	union power_supply_propval prop = {0};
+	struct power_supply *chg_psy = NULL;
+	int ret = 0;
 
 	chg_psy = info->chg_psy;
 
@@ -272,23 +274,26 @@ bool is_charger_exist(struct mtk_charger *info)
 
 	if (chg_psy == NULL || IS_ERR(chg_psy)) {
 		pr_notice("%s Couldn't get chg_psy\n", __func__);
-		ret = -1;
+		ret = 0;
 	} else {
-		ret = power_supply_get_property(chg_psy,
+		int res = power_supply_get_property(chg_psy,
 			POWER_SUPPLY_PROP_ONLINE, &prop);
-		ret = prop.intval;
+		if (res < 0)
+			ret = 0;
+		 else
+			ret = prop.intval;
 	}
 
 	chr_debug("%s:%d\n", __func__,
 		ret);
-	return ret;
+	return (ret > 0);
 }
 
 int get_charger_type(struct mtk_charger *info)
 {
-	union power_supply_propval prop, prop2, prop3;
-	static struct power_supply *chg_psy;
-	int ret;
+	union power_supply_propval prop = {0}, prop2 = {0}, prop3 = {0};
+	struct power_supply *chg_psy = NULL;
+	int res;
 
 	chg_psy = info->chg_psy;
 
@@ -301,29 +306,27 @@ int get_charger_type(struct mtk_charger *info)
 	if (chg_psy == NULL || IS_ERR(chg_psy)) {
 		pr_notice("%s Couldn't get chg_psy\n", __func__);
 	} else {
-		ret = power_supply_get_property(chg_psy,
+		res = power_supply_get_property(chg_psy,
 			POWER_SUPPLY_PROP_ONLINE, &prop);
+		if (!res)
+			res = power_supply_get_property(chg_psy,
+				POWER_SUPPLY_PROP_TYPE, &prop2);
+		if (!res)
+			res = power_supply_get_property(chg_psy,
+				POWER_SUPPLY_PROP_USB_TYPE, &prop3);
 
-		ret = power_supply_get_property(chg_psy,
-			POWER_SUPPLY_PROP_TYPE, &prop2);
-
-		ret = power_supply_get_property(chg_psy,
-			POWER_SUPPLY_PROP_USB_TYPE, &prop3);
-
-		if (prop.intval == 0)
+		if (prop.intval == 0) {
 			prop2.intval = POWER_SUPPLY_TYPE_UNKNOWN;
-		else if (prop2.intval == POWER_SUPPLY_TYPE_USB &&
-		    prop3.intval == POWER_SUPPLY_USB_TYPE_UNKNOWN)
+		} else if (prop2.intval == POWER_SUPPLY_TYPE_USB &&
+		    prop3.intval == POWER_SUPPLY_USB_TYPE_UNKNOWN) {
 			prop2.intval = POWER_SUPPLY_TYPE_UNKNOWN;
-		else if (prop2.intval == POWER_SUPPLY_TYPE_USB &&
-		    prop3.intval == POWER_SUPPLY_USB_TYPE_DCP)
+		} else if (prop2.intval == POWER_SUPPLY_TYPE_USB &&
+		    prop3.intval == POWER_SUPPLY_USB_TYPE_DCP) {
 			prop2.intval = POWER_SUPPLY_TYPE_USB_FLOAT;
+		}
 	}
-
-	pr_notice("%s online:%d type:%d usb_type:%d\n", __func__,
-		prop.intval,
-		prop2.intval,
-		prop3.intval);
+	pr_notice("%s online:%d type:%d usb_type:%d res:%d\n", __func__,
+		prop.intval, prop2.intval, prop3.intval, res);
 
 	return prop2.intval;
 }
@@ -450,6 +453,7 @@ int disable_hw_ovp(struct mtk_charger *info, int en)
 	}
 
 	pmic_pdev = of_find_device_by_node(pmic_node);
+	of_node_put(pmic_node);
 	if (!pmic_pdev) {
 		chr_err("get pmic_pdev fail\n");
 		return -1;
@@ -458,6 +462,7 @@ int disable_hw_ovp(struct mtk_charger *info, int en)
 
 	if (!chip) {
 		chr_err("get chip fail\n");
+		put_device(&pmic_pdev->dev);
 		return -1;
 	}
 
@@ -469,5 +474,6 @@ int disable_hw_ovp(struct mtk_charger *info, int en)
 		PMIC_RG_VCDT_HV_EN_MASK,
 		en);
 
+	put_device(&pmic_pdev->dev);
 	return 0;
 }

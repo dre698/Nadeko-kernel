@@ -691,7 +691,7 @@ int priv_support_ioctl(IN struct net_device *prNetDev,
 		return priv_get_struct(prNetDev, &rIwReqInfo, &prIwReq->u,
 				       (char *) &(prIwReq->u));
 
-#if (CFG_SUPPORT_QA_TOOL)
+#if CFG_SUPPORT_QA_AGENT
 	case IOCTL_QA_TOOL_DAEMON:
 	case SIOCDEVPRIVATE+2:
 		return priv_qa_agent(prNetDev, &rIwReqInfo, &(prIwReq->u),
@@ -2348,7 +2348,7 @@ priv_get_ndis(IN struct net_device *prNetDev,
 	return 0;
 }				/* priv_get_ndis */
 
-#if CFG_SUPPORT_QA_TOOL
+#if CFG_SUPPORT_QA_AGENT
 /*----------------------------------------------------------------------------*/
 /*!
  * \brief The routine handles ATE set operation.

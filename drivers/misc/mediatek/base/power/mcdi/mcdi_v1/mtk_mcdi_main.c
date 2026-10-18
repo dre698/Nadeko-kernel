@@ -17,6 +17,7 @@
 #include <linux/uaccess.h>
 #include <linux/kthread.h>
 #include <linux/delay.h>
+#include <linux/slab.h>
 
 #include <mtk_cpuidle.h>
 #include <mtk_idle.h>
@@ -40,6 +41,8 @@
 
 #define MCDI_DEBUG_INFO_MAGIC_NUM           0x1eef9487
 #define MCDI_DEBUG_INFO_NON_REPLACE_OFFSET  0x0008
+#define MCDI_MBOX_ACK_TIMEOUT_US            10000
+#define MCDI_MBOX_ACK_POLL_US               2
 
 static unsigned long mcdi_cnt_wfi[NF_CPU];
 static unsigned long mcdi_cnt_cpu[NF_CPU];
@@ -136,8 +139,17 @@ void wakeup_all_cpu(void)
 
 void wait_until_all_cpu_powered_on(void)
 {
-	while (!(mcdi_get_gov_data_num_mcusys() == 0x0))
-		;
+	unsigned int wait_us = 0;
+
+	while (mcdi_get_gov_data_num_mcusys() != 0) {
+		if (wait_us >= MCDI_MBOX_ACK_TIMEOUT_US) {
+			pr_debug("MCDI: wait all CPU on timeout\n");
+			return;
+		}
+
+		udelay(MCDI_MBOX_ACK_POLL_US);
+		wait_us += MCDI_MBOX_ACK_POLL_US;
+	}
 }
 
 void mcdi_wakeup_all_cpu(void)
@@ -200,20 +212,22 @@ static void mcdi_idle_state_setting(unsigned long idx, unsigned long enable)
 }
 
 /* debugfs */
-static char dbg_buf[4096] = { 0 };
-static char cmd_buf[512] = { 0 };
-
 /* mcdi_state */
 static ssize_t mcdi_state_read(struct file *filp,
 		char __user *userbuf, size_t count, loff_t *f_pos)
 {
 	int len = 0;
 	int i;
+	ssize_t ret;
+	char *dbg_buf = kmalloc(MCDI_PROC_BUF_LEN, GFP_KERNEL);
 	char *p = dbg_buf;
 	unsigned long ac_cpu_cond_info[NF_ANY_CORE_CPU_COND_INFO] = {0};
 	int latency_req = pm_qos_request(PM_QOS_CPU_DMA_LATENCY);
 
 	struct mcdi_feature_status feature_stat;
+
+	if (!dbg_buf)
+		return -ENOMEM;
 
 	get_mcdi_feature_status(&feature_stat);
 
@@ -260,7 +274,10 @@ static ssize_t mcdi_state_read(struct file *filp,
 
 	len = p - dbg_buf;
 
-	return simple_read_from_buffer(userbuf, count, f_pos, dbg_buf, len);
+	ret = simple_read_from_buffer(userbuf, count, f_pos, dbg_buf, len);
+	kfree(dbg_buf);
+
+	return ret;
 }
 
 static ssize_t mcdi_state_write(struct file *filp,
@@ -268,6 +285,7 @@ static ssize_t mcdi_state_write(struct file *filp,
 {
 	int ret = 0;
 	unsigned long param = 0;
+	char cmd_buf[512];
 	char *cmd_ptr = cmd_buf;
 	char *cmd_str = NULL;
 	char *param_str = NULL;
@@ -314,8 +332,13 @@ static ssize_t mcdi_info_read(struct file *filp,
 {
 	int len = 0;
 	int i, cpu;
+	ssize_t ret;
+	char *dbg_buf = kmalloc(MCDI_PROC_BUF_LEN, GFP_KERNEL);
 	char *p = dbg_buf;
 	struct cpuidle_driver *tbl = NULL;
+
+	if (!dbg_buf)
+		return -ENOMEM;
 
 	mcdi_log("mcdi stress test: %s (timer:%dus)",
 			mcdi_stress_en ? "Enalbe" : "Disable",
@@ -387,7 +410,10 @@ static ssize_t mcdi_info_read(struct file *filp,
 
 	len = p - dbg_buf;
 
-	return simple_read_from_buffer(userbuf, count, f_pos, dbg_buf, len);
+	ret = simple_read_from_buffer(userbuf, count, f_pos, dbg_buf, len);
+	kfree(dbg_buf);
+
+	return ret;
 }
 
 static ssize_t mcdi_info_write(struct file *filp,
@@ -398,6 +424,7 @@ static ssize_t mcdi_info_write(struct file *filp,
 	unsigned long param_1 = 0;
 	unsigned long param_2 = 0;
 	unsigned long param_cnt = 1;
+	char cmd_buf[512];
 	char *cmd_ptr = cmd_buf;
 	char *cmd_str = NULL;
 	char *param_0_str = NULL;
@@ -776,8 +803,11 @@ bool __mcdi_pause(unsigned int id, bool paused)
 
 bool _mcdi_task_pause(bool paused)
 {
+	unsigned int wait_us = 0;
+	unsigned int ack = paused ? 1 : 0;
+
 	if (!is_mcdi_working())
-		return false;
+		return true;
 
 	if (paused) {
 
@@ -785,20 +815,25 @@ bool _mcdi_task_pause(bool paused)
 
 		/* Notify SSPM to disable MCDI */
 		mcdi_mbox_write(MCDI_MBOX_PAUSE_ACTION, 1);
-
-		/* Polling until MCDI Task stopped */
-		while (!(mcdi_mbox_read(MCDI_MBOX_PAUSE_ACK) == 1))
-			;
 	} else {
 		/* Notify SSPM to enable MCDI */
 		mcdi_mbox_write(MCDI_MBOX_PAUSE_ACTION, 0);
-
-		/* Polling until MCDI Task resume */
-		while (!(mcdi_mbox_read(MCDI_MBOX_PAUSE_ACK) == 0))
-			;
-
-		trace_mcdi_task_pause_rcuidle(smp_processor_id(), 0);
 	}
+
+	while (mcdi_mbox_read(MCDI_MBOX_PAUSE_ACK) != ack) {
+		if (wait_us >= MCDI_MBOX_ACK_TIMEOUT_US) {
+			pr_debug("MCDI: pause %u ack timeout\n", paused);
+			if (paused)
+				mcdi_mbox_write(MCDI_MBOX_PAUSE_ACTION, 0);
+			return false;
+		}
+
+		udelay(MCDI_MBOX_ACK_POLL_US);
+		wait_us += MCDI_MBOX_ACK_POLL_US;
+	}
+
+	if (!paused)
+		trace_mcdi_task_pause_rcuidle(smp_processor_id(), 0);
 
 	return true;
 }

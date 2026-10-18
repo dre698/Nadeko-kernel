@@ -75,7 +75,7 @@ static void invalid_numa_statistics(void)
 static DEFINE_MUTEX(vm_numa_stat_lock);
 
 int sysctl_vm_numa_stat_handler(struct ctl_table *table, int write,
-		void __user *buffer, size_t *length, loff_t *ppos)
+		void *buffer, size_t *length, loff_t *ppos)
 {
 	int ret, oldval;
 
@@ -227,7 +227,7 @@ int calculate_normal_threshold(struct zone *zone)
 	 * 125		1024		10	16-32 GB	9
 	 */
 
-	mem = zone->managed_pages >> (27 - PAGE_SHIFT);
+	mem = zone_managed_pages(zone) >> (27 - PAGE_SHIFT);
 
 	threshold = 2 * fls(num_online_cpus()) * (1 + fls(mem));
 
@@ -1202,6 +1202,15 @@ const char * const vmstat_text[] = {
 	"pgscan_kswapd",
 	"pgscan_direct",
 	"pgscan_direct_throttle",
+	"lru_kswapd_no_progress",
+	"lru_kswapd_anon",
+	"lru_kswapd_file",
+	"lru_direct_anon",
+	"lru_direct_file",
+	"lru_kswapd_swap_full",
+	"lru_direct_swap_full",
+	"lru_no_gfp_io",
+	"lru_no_writepage",
 
 #ifdef CONFIG_NUMA
 	"zone_reclaim_failed",
@@ -1298,6 +1307,7 @@ const char * const vmstat_text[] = {
 #ifdef CONFIG_SPECULATIVE_PAGE_FAULT
 	"speculative_pgfault",
 #endif
+	"mmap_lock_contention",
 #endif /* CONFIG_VM_EVENTS_COUNTERS */
 };
 #endif /* CONFIG_PROC_FS || CONFIG_SYSFS || CONFIG_NUMA */
@@ -1581,7 +1591,7 @@ static void zoneinfo_show_print(struct seq_file *m, pg_data_t *pgdat,
 		   high_wmark_pages(zone),
 		   zone->spanned_pages,
 		   zone->present_pages,
-		   zone->managed_pages);
+		   zone_managed_pages(zone));
 
 	seq_printf(m,
 		   "\n        protection: (%ld",
@@ -1751,7 +1761,7 @@ static void refresh_vm_stats(struct work_struct *work)
 }
 
 int vmstat_refresh(struct ctl_table *table, int write,
-		   void __user *buffer, size_t *lenp, loff_t *ppos)
+		   void *buffer, size_t *lenp, loff_t *ppos)
 {
 	long val;
 	int err;
@@ -1983,10 +1993,12 @@ void __init init_mm_internals(void)
 	start_shepherd_timer();
 #endif
 #ifdef CONFIG_PROC_FS
-	proc_create_seq("buddyinfo", 0444, NULL, &fragmentation_op);
-	proc_create_seq("pagetypeinfo", 0400, NULL, &pagetypeinfo_op);
+	if (!IS_ENABLED(CONFIG_PROC_STRIPPED)) {
+		proc_create_seq("buddyinfo", 0444, NULL, &fragmentation_op);
+		proc_create_seq("pagetypeinfo", 0400, NULL, &pagetypeinfo_op);
+		proc_create_seq("zoneinfo", 0444, NULL, &zoneinfo_op);
+	}
 	proc_create_seq("vmstat", 0444, NULL, &vmstat_op);
-	proc_create_seq("zoneinfo", 0444, NULL, &zoneinfo_op);
 #endif
 }
 

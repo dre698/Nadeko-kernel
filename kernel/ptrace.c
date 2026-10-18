@@ -239,6 +239,7 @@ static void ptrace_unfreeze_traced(struct task_struct *task)
 static int ptrace_check_attach(struct task_struct *child, bool ignore_state)
 {
 	int ret = -ESRCH;
+	child->ptrace_message = 0;
 
 	/*
 	 * We take the read lock around doing both checks to close a
@@ -281,11 +282,24 @@ static bool ptrace_has_cap(struct user_namespace *ns, unsigned int mode)
 	return ns_capable(ns, CAP_SYS_PTRACE);
 }
 
+static bool task_still_dumpable(struct task_struct *task, unsigned int mode)
+{
+	struct mm_struct *mm = task->mm;
+	if (mm) {
+		if (get_dumpable(mm) == SUID_DUMP_USER)
+			return true;
+		return ptrace_has_cap(mm->user_ns, mode);
+	}
+
+	if (task->user_dumpable)
+		return true;
+	return ptrace_has_cap(&init_user_ns, mode);
+}
+
 /* Returns 0 on success, -errno on denial. */
 static int __ptrace_may_access(struct task_struct *task, unsigned int mode)
 {
 	const struct cred *cred = current_cred(), *tcred;
-	struct mm_struct *mm;
 	kuid_t caller_uid;
 	kgid_t caller_gid;
 
@@ -346,11 +360,8 @@ ok:
 	 * Pairs with a write barrier in commit_creds().
 	 */
 	smp_rmb();
-	mm = task->mm;
-	if (mm &&
-	    ((get_dumpable(mm) != SUID_DUMP_USER) &&
-	     !ptrace_has_cap(mm->user_ns, mode)))
-	    return -EPERM;
+	if (!task_still_dumpable(task, mode))
+		return -EPERM;
 
 	return security_ptrace_access_check(task, mode);
 }
@@ -597,6 +608,8 @@ static int ptrace_detach(struct task_struct *child, unsigned int data)
 	 * the comment in ptrace_resume().
 	 */
 	child->exit_code = data;
+	/* Reset ptrace_message to avoid stale PID leaks */
+	child->ptrace_message = 0;
 	__ptrace_detach(current, child);
 	write_unlock_irq(&tasklist_lock);
 
@@ -857,17 +870,9 @@ static int ptrace_resume(struct task_struct *child, long request,
 	}
 
 	/*
-	 * Change ->exit_code and ->state under siglock to avoid the race
-	 * with wait_task_stopped() in between; a non-zero ->exit_code will
-	 * wrongly look like another report from tracee.
-	 *
-	 * Note that we need siglock even if ->exit_code == data and/or this
-	 * status was not reported yet, the new status must not be cleared by
-	 * wait_task_stopped() after resume.
-	 *
-	 * If data == 0 we do not care if wait_task_stopped() reports the old
-	 * status and clears the code too; this can't race with the tracee, it
-	 * takes siglock after resume.
+	 * Change ->exit_code and ->state under siglock to avoid races
+	 * with wait_task_stopped(); a non-zero ->exit_code may look like
+	 * a new report from the tracee.
 	 */
 	need_siglock = data && !thread_group_empty(current);
 	if (need_siglock)
@@ -876,6 +881,9 @@ static int ptrace_resume(struct task_struct *child, long request,
 	wake_up_state(child, __TASK_TRACED);
 	if (need_siglock)
 		spin_unlock_irq(&child->sighand->siglock);
+
+	/* Clear ptrace_message to avoid leaking stale event data (e.g., zygote PID) */
+	child->ptrace_message = 0;
 
 	return 0;
 }

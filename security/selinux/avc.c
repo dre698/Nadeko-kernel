@@ -180,7 +180,6 @@ static void avc_dump_query(struct audit_buffer *ab, struct selinux_state *state,
 	u32 scontext_len;
 
 	rc = security_sid_to_context(state, ssid, &scontext, &scontext_len);
-
 	if (rc)
 		audit_log_format(ab, "ssid=%d", ssid);
 	else {
@@ -719,12 +718,13 @@ static struct avc_node *avc_insert(struct selinux_avc *avc,
 	spin_lock_irqsave(lock, flag);
 	hlist_for_each_entry(pos, head, list) {
 		if (pos->ae.ssid == ssid &&
-			pos->ae.tsid == tsid &&
-			pos->ae.tclass == tclass) {
+		    pos->ae.tsid == tsid &&
+		    pos->ae.tclass == tclass) {
 			avc_node_replace(avc, node, pos);
 			goto found;
 		}
 	}
+
 	hlist_add_head_rcu(&node->list, head);
 found:
 	spin_unlock_irqrestore(lock, flag);
@@ -741,7 +741,8 @@ found:
 static void avc_audit_pre_callback(struct audit_buffer *ab, void *a)
 {
 	struct common_audit_data *ad = a;
-	audit_log_format(ab, "avc:  denied ");
+	audit_log_format(ab, "avc:  %s ",
+			 ad->selinux_audit_data->denied ? "denied" : "granted");
 	avc_dump_av(ab, ad->selinux_audit_data->tclass,
 			ad->selinux_audit_data->audited);
 	audit_log_format(ab, " for ");
@@ -761,8 +762,10 @@ static void avc_audit_post_callback(struct audit_buffer *ab, void *a)
 		       ad->selinux_audit_data->ssid,
 		       ad->selinux_audit_data->tsid,
 		       ad->selinux_audit_data->tclass);
-	audit_log_format(ab, " permissive=%u",
-			 ad->selinux_audit_data->result ? 0 : 1);
+	if (ad->selinux_audit_data->denied) {
+		audit_log_format(ab, " permissive=%u",
+				 ad->selinux_audit_data->result ? 0 : 1);
+	}
 }
 
 /* This is the slow part of avc audit with big stack footprint */
@@ -774,6 +777,9 @@ noinline int slow_avc_audit(struct selinux_state *state,
 	struct common_audit_data stack_data;
 	struct selinux_audit_data sad;
 
+	/* Only log permissive=1 messages for SECURITY_SELINUX_DEVELOP */
+	if (denied && !result)
+		return 0;
 	if (!denied)
 		return 0;
 
@@ -787,6 +793,7 @@ noinline int slow_avc_audit(struct selinux_state *state,
 	sad.ssid = ssid;
 	sad.tsid = tsid;
 	sad.audited = audited;
+	sad.denied = denied;
 	sad.result = result;
 	sad.state = state;
 
@@ -860,8 +867,9 @@ static int avc_update_node(struct selinux_avc *avc,
 	 * and won't audit anything at all, leading to silent denials in
 	 * permissive mode that only appear when in enforcing mode.
 	 *
-	 * See the corresponding handling of MAY_NOT_BLOCK in avc_audit()
-	 * and selinux_inode_permission().
+	 * See the corresponding handling in slow_avc_audit(), and the
+	 * logic in selinux_inode_permission for the MAY_NOT_BLOCK flag,
+	 * which is transliterated into AVC_NONBLOCKING.
 	 */
 	if (flags & AVC_NONBLOCKING)
 		return 0;
@@ -1188,7 +1196,7 @@ inline int avc_has_perm_noaudit(struct selinux_state *state,
 int avc_has_perm(struct selinux_state *state, u32 ssid, u32 tsid, u16 tclass,
 		 u32 requested, struct common_audit_data *auditdata)
 {
-	struct av_decision avd = { .auditdeny = 0xffffffff };
+	struct av_decision avd;
 	int rc, rc2;
 
 	rc = avc_has_perm_noaudit(state, ssid, tsid, tclass, requested, 0,
@@ -1196,25 +1204,6 @@ int avc_has_perm(struct selinux_state *state, u32 ssid, u32 tsid, u16 tclass,
 
 	rc2 = avc_audit(state, ssid, tsid, tclass, requested, &avd, rc,
 			auditdata, 0);
-	if (rc2)
-		return rc2;
-	return rc;
-}
-
-int avc_has_perm_flags(struct selinux_state *state,
-		       u32 ssid, u32 tsid, u16 tclass, u32 requested,
-		       struct common_audit_data *auditdata,
-		       int flags)
-{
-	struct av_decision avd = { .auditdeny = 0xffffffff };
-	int rc, rc2;
-
-	rc = avc_has_perm_noaudit(state, ssid, tsid, tclass, requested,
-				  (flags & MAY_NOT_BLOCK) ? AVC_NONBLOCKING : 0,
-				  &avd);
-
-	rc2 = avc_audit(state, ssid, tsid, tclass, requested, &avd, rc,
-			auditdata, flags);
 	if (rc2)
 		return rc2;
 	return rc;
