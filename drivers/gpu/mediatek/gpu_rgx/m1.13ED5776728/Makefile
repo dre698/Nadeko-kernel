@@ -1,4 +1,4 @@
-OPTIM = -O3
+OPTIM = -Os
 
 ccflags-y += -DCONFIG_MACH_MT6765
 
@@ -9,7 +9,7 @@ RGX_TOP := $(dir $(lastword $(MAKEFILE_LIST)))
 ccflags-y += -include $(RGX_TOP)/include/config_kernel_user_$(MTK_PLATFORM)$(ECO).h
 
 ccflags-y += \
-	-D__linux__ $(OPTIM) \
+	-D__linux__ $(OPTIM) -g \
 	-fno-strict-aliasing \
 	-W -Wall \
 	-Wno-missing-field-initializers \
@@ -18,13 +18,6 @@ ccflags-y += \
 	-Wmissing-prototypes \
 	-Wstrict-prototypes \
 	-Wno-unused-parameter \
-	-Wno-unused-variable \
-	-Wno-unused-but-set-variable \
-	-Wno-unused-label \
-	-Wno-unused-function \
-	-Wno-sometimes-uninitialized \
-	-Wno-enum-conversion \
-	-Wno-misleading-indentation \
 	-Wno-sign-compare \
 	-Wno-type-limits \
 	-Wno-error
@@ -43,6 +36,7 @@ pvrsrvkm-y += \
 	generated/rogue/rgxcmp_bridge/server_rgxcmp_bridge.o \
 	generated/rogue/rgxhwperf_bridge/server_rgxhwperf_bridge.o \
 	generated/rogue/rgxfwdbg_bridge/server_rgxfwdbg_bridge.o \
+	generated/rogue/rgxbreakpoint_bridge/server_rgxbreakpoint_bridge.o \
 	generated/rogue/rgxregconfig_bridge/server_rgxregconfig_bridge.o \
 	generated/rogue/htbuffer_bridge/client_htbuffer_direct_bridge.o \
 	generated/rogue/htbuffer_bridge/server_htbuffer_bridge.o \
@@ -74,12 +68,14 @@ pvrsrvkm-y += \
 	services/server/devices/rogue/rgxccb.o \
 	services/server/devices/rogue/rgxmmuinit.o \
 	services/server/devices/rogue/rgxtransfer.o \
+	services/server/devices/rogue/rgxbreakpoint.o \
 	services/server/devices/rogue/rgxmipsmmuinit.o \
 	services/server/devices/rogue/rgxinit.o \
 	services/server/devices/rogue/rgxsignals.o \
 	services/server/devices/rogue/rgxlayer_impl.o \
 	services/server/devices/rogue/rgxtdmtransfer.o \
 	services/server/devices/rogue/rgxbvnc.o \
+	services/server/devices/rogue/rgxdebug.o \
 	services/server/devices/rogue/rgxta3d.o \
 	services/server/devices/rogue/rgxkicksync.o \
 	services/server/devices/rogue/rgxsrvinit.o \
@@ -120,6 +116,7 @@ pvrsrvkm-y += \
 	services/server/common/vz_vmm_vm.o \
 	services/server/common/vmm_pvz_client.o \
 	services/server/common/vmm_pvz_server.o \
+	services/server/common/htb_debug.o \
 	services/server/common/di_server.o \
 	services/server/env/linux/km_apphint.o \
 	services/server/env/linux/osmmap_stub.o \
@@ -127,6 +124,7 @@ pvrsrvkm-y += \
 	services/server/env/linux/allocmem.o \
 	services/server/env/linux/pvr_bridge_k.o \
 	services/server/env/linux/physmem_dmabuf.o \
+	services/server/env/linux/pvr_debugfs.o \
 	services/server/env/linux/osconnection_server.o \
 	services/server/env/linux/handle_idr.o \
 	services/server/env/linux/event.o \
@@ -136,7 +134,9 @@ pvrsrvkm-y += \
 	services/server/env/linux/physmem_osmem_linux.o \
 	services/server/env/linux/osfunc.o \
 	services/server/env/linux/pvr_gputrace.o \
+	services/server/env/linux/pvr_debug.o \
 	services/server/env/linux/pvr_procfs.o \
+	services/server/env/linux/pvr_ion_stats.o \
 	services/shared/devices/rogue/rgx_hwperf_table.o \
 	services/shared/common/devicemem_utils.o \
 	services/shared/common/hash.o \
@@ -165,14 +165,6 @@ endif
 pvrsrvkm-$(CONFIG_ARM) += services/server/env/linux/osfunc_arm.o
 pvrsrvkm-$(CONFIG_ARM64) += services/server/env/linux/osfunc_arm64.o
 pvrsrvkm-$(CONFIG_EVENT_TRACING) += services/server/env/linux/trace_events.o
-pvrsrvkm-$(CONFIG_DEBUG_KERNEL) += \
-	services/server/devices/rogue/rgxdebug.o \
-	services/server/common/htb_debug.o \
-	services/server/env/linux/pvr_debugfs.o \
-	services/server/env/linux/pvr_debug.o
-ifeq ($(CONFIG_DEBUG_KERNEL),)
-pvrsrvkm-y += services/server/env/linux/pvr_debug_stub.o
-endif
 
 ccflags-y += \
 	-I$(RGX_TOP)/hwdefs/rogue \
@@ -190,6 +182,7 @@ ccflags-y += \
 	-I$(RGX_TOP)/generated/rogue/htbuffer_bridge \
 	-I$(RGX_TOP)/generated/rogue/mm_bridge \
 	-I$(RGX_TOP)/generated/rogue/pvrtl_bridge \
+	-I$(RGX_TOP)/generated/rogue/rgxbreakpoint_bridge \
 	-I$(RGX_TOP)/generated/rogue/rgxcmp_bridge \
 	-I$(RGX_TOP)/generated/rogue/rgxfwdbg_bridge \
 	-I$(RGX_TOP)/generated/rogue/rgxhwperf_bridge \
