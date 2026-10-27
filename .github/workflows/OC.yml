@@ -81,16 +81,8 @@ jobs:
           echo "# CONFIG_LOCALVERSION_AUTO is not set" >> "$DEFCONFIG"
           grep LOCALVERSION "$DEFCONFIG"
 
-      - name: Apply +300MHz OC patch
-        run: |
-          python3 - << 'PYEOF'
-          import re
-          f = "drivers/misc/mediatek/base/power/cpufreq_v1/src/mach/mt6765/mtk_cpufreq_opp_pv_table.h"
-          s = open(f).read()
-          s = re.sub(r'\{ (\d+), (\d+), (\d+), (\d+) \}', lambda m: f'{{ {int(m.group(1))+300}, {m.group(2)}, {m.group(3)}, {m.group(4)} }}', s)
-          open(f, "w").write(s)
-          PYEOF
-          echo "OC patch applied: all OPP states +300MHz"
+      - name: Apply OC patch
+        run: python3 .github/scripts/oc_patch.py
 
       - name: Build kernel
         run: |
