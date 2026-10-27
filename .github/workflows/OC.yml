@@ -1,7 +1,7 @@
 # MTK Kernel Build with NadekoSU Integration
 # Defconfig: blossom_defconfig
 
-name: Build Nadeko Kernel With NadekoSU OC
+name: Build Nadeko Kernel OC With NadekoSU
 
 on:
   workflow_dispatch:
@@ -65,13 +65,21 @@ jobs:
       - name: Integrate NadekoSU
         run: |
           curl -LSs "https://raw.githubusercontent.com/dre698/NadekoSU/main/kernel/setup.sh" | bash
-          
+
       - name: Get NadekoSU version
         run: |
           NSU_GIT_VER=$(cd KernelSU && git rev-list --count HEAD 2>/dev/null || echo "0")
           NSU_VER=$((33300 + NSU_GIT_VER))
           echo "NSU_VER=$NSU_VER" >> $GITHUB_ENV
           echo "NadekoSU version: $NSU_VER"
+
+      - name: Set CONFIG_LOCALVERSION
+        run: |
+          DEFCONFIG="arch/${KERNEL_ARCH}/configs/${KERNEL_DEFCONFIG}"
+          sed -i '/^CONFIG_LOCALVERSION=/d;/^CONFIG_LOCALVERSION_AUTO=/d;/^# CONFIG_LOCALVERSION_AUTO/d' "$DEFCONFIG"
+          echo 'CONFIG_LOCALVERSION="-Nadeko-OC"' >> "$DEFCONFIG"
+          echo "# CONFIG_LOCALVERSION_AUTO is not set" >> "$DEFCONFIG"
+          grep LOCALVERSION "$DEFCONFIG"
 
       - name: Apply +300MHz OC patch
         run: |
@@ -140,7 +148,7 @@ jobs:
 
           cat > anykernel.sh << 'EOF'
           properties() { '
-          kernel.string=
+          kernel.string=Overclocked Version
           do.devicecheck=1
           device.name1=blossom
           device.name2=dandelion
@@ -253,7 +261,7 @@ jobs:
             B_MIN=$((${{ env.B_TIME }} / 60))
             B_SEC=$((${{ env.B_TIME }} % 60))
             KERNEL_VER=$(cat out/include/config/kernel.release 2>/dev/null || echo "unknown")
-            CAPTION=$(printf "build succeeded in %sm, %ss\nkernel: \`%s\`\ndefconfig: %s\nmd5: \`%s\`\ncompiler: %s" "$B_MIN" "$B_SEC" "$KERNEL_VER" "${{ env.KERNEL_DEFCONFIG }}" "${{ env.Z_MD5 }}" "$COMPILER_VER")
+            CAPTION=$(printf "build succeeded in %sm, %ss\nkernel: \`%s\`\ndefconfig: %s\nmd5: \`%s\`\ncompiler: %s (Overclocked)" "$B_MIN" "$B_SEC" "$KERNEL_VER" "${{ env.KERNEL_DEFCONFIG }}" "${{ env.Z_MD5 }}" "$COMPILER_VER")
             for CHAT in "$GROUP_CHAT_ID"; do
               curl -s -F chat_id="$CHAT" $( [ "$CHAT" = "$GROUP_CHAT_ID" ] && echo "-F message_thread_id=2" ) \
                 -F document=@${{ env.ARTIFACT_NAME }}.zip \
