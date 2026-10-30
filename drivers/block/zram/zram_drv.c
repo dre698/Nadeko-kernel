@@ -1569,14 +1569,15 @@ compress_again:
 				__GFP_HIGHMEM |
 				__GFP_MOVABLE |
 				__GFP_CMA);
-	if (IS_ERR_VALUE(handle)) {
+	/* zs_malloc() returns 0 (not an ERR_VALUE) on allocation failure */
+	if (IS_ERR_VALUE(handle) || !handle) {
 		zcomp_stream_put(zram->comps[ZRAM_PRIMARY_COMP]);
 		atomic64_inc(&zram->stats.writestall);
 		handle = zs_malloc(zram->mem_pool, comp_len,
 				GFP_NOIO | __GFP_HIGHMEM |
 				__GFP_MOVABLE | __GFP_CMA);
-		if (IS_ERR_VALUE(handle))
-			return PTR_ERR((void *)handle);
+		if (IS_ERR_VALUE(handle) || !handle)
+			return handle ? PTR_ERR((void *)handle) : -ENOMEM;
 
 		if (comp_len != PAGE_SIZE)
 			goto compress_again;
@@ -1792,9 +1793,10 @@ static int zram_recompress(struct zram *zram, u32 index, struct page *page,
 			       __GFP_NOWARN |
 			       __GFP_HIGHMEM |
 			       __GFP_MOVABLE);
-	if (IS_ERR_VALUE(handle_new)) {
+	/* zs_malloc() returns 0 (not an ERR_VALUE) on allocation failure */
+	if (IS_ERR_VALUE(handle_new) || !handle_new) {
 		zcomp_stream_put(zram->comps[prio]);
-		return PTR_ERR((void *)handle_new);
+		return handle_new ? PTR_ERR((void *)handle_new) : -ENOMEM;
 	}
 
 	dst = zs_map_object(zram->mem_pool, handle_new, ZS_MM_WO);
