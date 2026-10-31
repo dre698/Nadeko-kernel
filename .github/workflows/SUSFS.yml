@@ -66,6 +66,11 @@ jobs:
         run: |
           curl -LSs "https://raw.githubusercontent.com/dre698/NadekoSU/main/kernel/setup.sh" | bash
 
+      - name: Run syscall_hook.sh
+        run: |
+          chmod u+x syscall_hook.sh
+          bash syscall_hook.sh
+
       - name: Get NadekoSU version
         run: |
           NSU_GIT_VER=$(cd KernelSU && git rev-list --count HEAD 2>/dev/null || echo "0")
