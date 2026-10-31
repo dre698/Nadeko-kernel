@@ -175,8 +175,71 @@ ns_clone_ok = fix(
     "namespace.c clone_mnt() -> spoofed mnt_id for KSU/zygote",
 )
 
+# CONFIG_KSU_SUSFS (inline hook mode) requires these 3 hook calls to exist
+# in the kernel source - checked at build time by
+# KernelSU/kernel/tools/inline_hook_check.mk. This kernel's existing manual
+# hook integration didn't add them (CONFIG_KSU_MANUAL_HOOK doesn't need
+# them), so they're added here following the same `#ifdef CONFIG_KSU`
+# style already used for the execveat/faccessat/stat hooks in this tree.
+setresuid_ok = fix(
+    "kernel/sys.c",
+    "SYSCALL_DEFINE3(setresuid, uid_t, ruid, uid_t, euid, uid_t, suid)\n"
+    "{\n"
+    "\treturn __sys_setresuid(ruid, euid, suid);\n"
+    "}\n",
+    "#ifdef CONFIG_KSU\n"
+    "extern int ksu_handle_setresuid(uid_t ruid, uid_t euid, uid_t suid);\n"
+    "#endif\n\n"
+    "SYSCALL_DEFINE3(setresuid, uid_t, ruid, uid_t, euid, uid_t, suid)\n"
+    "{\n"
+    "#ifdef CONFIG_KSU\n"
+    "\tksu_handle_setresuid(ruid, euid, suid);\n"
+    "#endif\n"
+    "\treturn __sys_setresuid(ruid, euid, suid);\n"
+    "}\n",
+    "kernel/sys.c setresuid hook",
+)
+
+sys_read_ok = fix(
+    "fs/read_write.c",
+    "ssize_t ksys_read(unsigned int fd, char __user *buf, size_t count)\n"
+    "{\n"
+    "\tstruct fd f = fdget_pos(fd);\n"
+    "\tssize_t ret = -EBADF;\n",
+    "#ifdef CONFIG_KSU\n"
+    "extern int ksu_handle_sys_read(unsigned int fd, char __user **buf_ptr, size_t *count_ptr);\n"
+    "#endif\n\n"
+    "ssize_t ksys_read(unsigned int fd, char __user *buf, size_t count)\n"
+    "{\n"
+    "\tstruct fd f = fdget_pos(fd);\n"
+    "\tssize_t ret = -EBADF;\n"
+    "#ifdef CONFIG_KSU\n"
+    "\tksu_handle_sys_read(fd, &buf, &count);\n"
+    "#endif\n",
+    "fs/read_write.c ksys_read hook",
+)
+
+input_event_ok = fix(
+    "drivers/input/input.c",
+    "static void input_handle_event(struct input_dev *dev,\n"
+    "\t\t\t       unsigned int type, unsigned int code, int value)\n"
+    "{\n"
+    "\tint disposition = input_get_disposition(dev, type, code, &value);\n",
+    "#ifdef CONFIG_KSU\n"
+    "extern int ksu_handle_input_handle_event(unsigned int *type, unsigned int *code, int *value);\n"
+    "#endif\n\n"
+    "static void input_handle_event(struct input_dev *dev,\n"
+    "\t\t\t       unsigned int type, unsigned int code, int value)\n"
+    "{\n"
+    "\tint disposition = input_get_disposition(dev, type, code, &value);\n"
+    "#ifdef CONFIG_KSU\n"
+    "\tksu_handle_input_handle_event(&type, &code, &value);\n"
+    "#endif\n",
+    "drivers/input/input.c input_handle_event hook",
+)
+
 import sys
-if not (sched_ok and ns_create_ok and ns_clone_ok):
+if not (sched_ok and ns_create_ok and ns_clone_ok and setresuid_ok and sys_read_ok and input_event_ok):
     sys.exit(1)
 PYEOF
 FIXUP_STATUS=$?
