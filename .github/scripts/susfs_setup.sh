@@ -48,19 +48,20 @@ mkdir -p "$REJECT_DIR"
 # mean this kernel already has the equivalent susfs-compatible overlayfs changes
 # (inherited from the Jujutsu-kernel base). That's not a real failure - drop those
 # rejects instead of treating them as something to fix.
-for rej in $(find . -name "*.rej" 2>/dev/null); do
-  src="${rej%.rej}"
+for rej in $(find . -path "./$REJECT_DIR" -prune -o -name "*.rej" -print 2>/dev/null); do
+  src="${rej#./}"
+  src="${src%.rej}"
   if [[ "$src" == fs/overlayfs/* ]] && grep -q "Reversed (or previously applied)" <<< "$PATCH_LOG"; then
     echo "Dropping $rej (overlayfs already has this change, see note above)"
     rm -f "$rej"
   else
     mkdir -p "$REJECT_DIR/$(dirname "$src")"
-    cp "$rej" "$REJECT_DIR/$rej"
+    cp "$rej" "$REJECT_DIR/$src.rej"
     cp "$src" "$REJECT_DIR/$src.current" 2>/dev/null || true
   fi
 done
 
-REMAINING=$(find . -name "*.rej" 2>/dev/null)
+REMAINING=$(find . -path "./$REJECT_DIR" -prune -o -name "*.rej" -print 2>/dev/null)
 if [ -n "$REMAINING" ]; then
   echo ""
   echo "=== susfs patch did not apply cleanly ==="
