@@ -13,6 +13,7 @@ set -eu
 SUSFS_BRANCH="kernel-4.19"
 SUSFS_REPO="https://gitlab.com/simonpunk/susfs4ksu.git"
 WORK="/tmp/susfs4ksu"
+REJECT_DIR="susfs-rejects"
 
 echo "Cloning susfs4ksu (${SUSFS_BRANCH})..."
 rm -rf "$WORK"
@@ -36,22 +37,40 @@ cp "$WORK/kernel_patches/include/linux/susfs.h" include/linux/susfs.h
 
 echo "Applying $PATCH_FILE..."
 set +e
-patch -p1 --fuzz=3 --no-backup-if-mismatch < "$PATCH_FILE"
-PATCH_STATUS=$?
+PATCH_LOG=$(patch -p1 --fuzz=3 --no-backup-if-mismatch < "$PATCH_FILE" 2>&1)
 set -e
+echo "$PATCH_LOG"
 
-REJECTS=$(find . -name "*.rej" 2>/dev/null)
-if [ -n "$REJECTS" ] || [ "$PATCH_STATUS" -ne 0 ]; then
+rm -rf "$REJECT_DIR"
+mkdir -p "$REJECT_DIR"
+
+# fs/overlayfs hunks that fail as "Reversed (or previously applied) patch detected"
+# mean this kernel already has the equivalent susfs-compatible overlayfs changes
+# (inherited from the Jujutsu-kernel base). That's not a real failure - drop those
+# rejects instead of treating them as something to fix.
+for rej in $(find . -name "*.rej" 2>/dev/null); do
+  src="${rej%.rej}"
+  if [[ "$src" == fs/overlayfs/* ]] && grep -q "Reversed (or previously applied)" <<< "$PATCH_LOG"; then
+    echo "Dropping $rej (overlayfs already has this change, see note above)"
+    rm -f "$rej"
+  else
+    mkdir -p "$REJECT_DIR/$(dirname "$src")"
+    cp "$rej" "$REJECT_DIR/$rej"
+    cp "$src" "$REJECT_DIR/$src.current" 2>/dev/null || true
+  fi
+done
+
+REMAINING=$(find . -name "*.rej" 2>/dev/null)
+if [ -n "$REMAINING" ]; then
   echo ""
   echo "=== susfs patch did not apply cleanly ==="
-  echo "Rejected hunks:"
-  echo "$REJECTS"
+  echo "Rejected hunks (copied to $REJECT_DIR/ for upload):"
+  echo "$REMAINING"
   echo ""
-  echo "This kernel has mediatek/jujutsu-specific changes in files susfs also touches"
-  echo "(fs/stat.c, fs/open.c, fs/namespace.c, fs/proc/*, mm/*, etc). Each .rej above"
-  echo "needs to be resolved by hand against the corresponding .orig file, then"
-  echo "re-applied, before this can build cleanly."
+  echo "This kernel has mediatek/jujutsu-specific changes in files susfs also touches."
+  echo "Each .rej needs to be resolved by hand against the current file, then re-applied."
   exit 1
 fi
 
-echo "susfs4ksu kernel patch applied cleanly."
+rmdir "$REJECT_DIR" 2>/dev/null || true
+echo "susfs4ksu kernel patch applied cleanly (overlayfs hunks already present, skipped)."

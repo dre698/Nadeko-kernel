@@ -78,6 +78,14 @@ jobs:
           chmod +x .github/scripts/susfs_setup.sh
           .github/scripts/susfs_setup.sh
 
+      - name: Upload SUSFS rejects
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: susfs-rejects
+          path: susfs-rejects/
+          retention-days: 7
+
       - name: Enable SUSFS Kconfig options
         run: |
           DEFCONFIG="arch/${KERNEL_ARCH}/configs/${KERNEL_DEFCONFIG}"
