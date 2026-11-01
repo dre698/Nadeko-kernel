@@ -213,3 +213,116 @@ fi
 
 rmdir "$REJECT_DIR" 2>/dev/null || true
 echo "susfs4ksu kernel patch applied cleanly (overlayfs hunks already present, skipped)."
+
+# --- Command-ID gap between this susfs.c (kernel-4.19 branch, ~v1.3.x) and
+# NadekoSU's drivers/kernelsu/supercall/dispatch.c (built against a newer
+# susfs API) ---
+# dispatch.c references 4 commands this susfs.c predates:
+#   CMD_SUSFS_ADD_SUS_PATH_LOOP, CMD_SUSFS_HIDE_SUS_MNTS_FOR_NON_SU_PROCS,
+#   CMD_SUSFS_ADD_SUS_MAP, CMD_SUSFS_ENABLE_AVC_LOG_SPOOFING
+# The numeric IDs below are taken verbatim from NadekoSU's own userspace
+# (userspace/ksud/src/android/susfs/api/magic.rs) - not guessed.
+# sus_path_loop shares susfs_add_sus_path's exact arg struct, so it's wired
+# to the real, already-working handler. The other 3 (sus_map, hide-mounts-
+# for-non-su-procs, avc-log-spoofing) are genuinely newer susfs features
+# with no implementation to crib from in this branch - they're wired as
+# accepted no-op toggles (compile + respond success, but don't do anything)
+# rather than guessing at real VFS/AVC hooking kernel code.
+cat >> include/linux/susfs_def.h << 'EOF'
+
+#ifndef CMD_SUSFS_ADD_SUS_PATH_LOOP
+#define CMD_SUSFS_ADD_SUS_PATH_LOOP 0x55553
+#endif
+#ifndef CMD_SUSFS_HIDE_SUS_MNTS_FOR_NON_SU_PROCS
+#define CMD_SUSFS_HIDE_SUS_MNTS_FOR_NON_SU_PROCS 0x55561
+#endif
+#ifndef CMD_SUSFS_ENABLE_AVC_LOG_SPOOFING
+#define CMD_SUSFS_ENABLE_AVC_LOG_SPOOFING 0x60010
+#endif
+#ifndef CMD_SUSFS_ADD_SUS_MAP
+#define CMD_SUSFS_ADD_SUS_MAP 0x60020
+#endif
+
+int susfs_add_sus_path_loop(void __user *arg);
+int susfs_set_hide_sus_mnts_for_non_su_procs(void __user *arg);
+int susfs_add_sus_map(void __user *arg);
+int susfs_set_avc_log_spoofing(void __user *arg);
+EOF
+
+cat >> fs/susfs.c << 'EOF'
+
+/*
+ * ---------------------------------------------------------------------
+ * Compat shims for commands dispatch.c expects that this susfs.c
+ * (kernel-4.19 branch, ~v1.3.x) predates. See include/linux/susfs_def.h
+ * for the command IDs and note above in susfs_setup.sh for details.
+ * ---------------------------------------------------------------------
+ */
+
+/* susfs_add_sus_path's real declaration lives wherever this file already
+ * declares it (varies by susfs.c version); declare it locally here too
+ * rather than in the shared header, to avoid a conflicting re-declaration
+ * if the existing one differs slightly. A matching extern for an already-
+ * declared function is harmless in C. */
+extern int susfs_add_sus_path(void __user *arg);
+
+int susfs_add_sus_path_loop(void __user *arg)
+{
+	/* Identical arg layout to CMD_SUSFS_ADD_SUS_PATH; reuse the real,
+	 * already-working handler instead of a stub. */
+	return susfs_add_sus_path(arg);
+}
+
+struct st_susfs_toggle_compat {
+	bool enabled;
+	int err;
+};
+
+int susfs_set_hide_sus_mnts_for_non_su_procs(void __user *arg)
+{
+	struct st_susfs_toggle_compat info;
+
+	if (copy_from_user(&info, arg, sizeof(info)))
+		return -EFAULT;
+	/* STUB: not implemented in this susfs backport - accepted as a
+	 * no-op so userspace doesn't see ERR_CMD_NOT_SUPPORTED. */
+	info.err = 0;
+	if (copy_to_user(arg, &info, sizeof(info)))
+		return -EFAULT;
+	return 0;
+}
+
+int susfs_set_avc_log_spoofing(void __user *arg)
+{
+	struct st_susfs_toggle_compat info;
+
+	if (copy_from_user(&info, arg, sizeof(info)))
+		return -EFAULT;
+	/* STUB: not implemented in this susfs backport. */
+	info.err = 0;
+	if (copy_to_user(arg, &info, sizeof(info)))
+		return -EFAULT;
+	return 0;
+}
+
+int susfs_add_sus_map(void __user *arg)
+{
+	/* 256 = SUSFS_MAX_LEN_PATHNAME per NadekoSU's userspace
+	 * (userspace/ksud/src/android/susfs/api/magic.rs) - hardcoded here
+	 * rather than relying on a macro name that may not exist in this
+	 * older susfs.h. */
+	struct st_susfs_sus_map_compat {
+		char target_pathname[256];
+		int err;
+	} info;
+
+	if (copy_from_user(&info, arg, sizeof(info)))
+		return -EFAULT;
+	/* STUB: not implemented in this susfs backport. */
+	info.err = 0;
+	if (copy_to_user(arg, &info, sizeof(info)))
+		return -EFAULT;
+	return 0;
+}
+EOF
+echo "[compat] added susfs command-ID compat shims (sus_path_loop real, 3 others stubbed)"
