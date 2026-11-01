@@ -1,39 +1,32 @@
 #!/bin/bash
 set -eu
 
-# Applies simonpunk's susfs4ksu kernel-side patch (fs/susfs.c, include/linux/susfs.h,
-# 50_add_susfs_in_kernel-4.19.patch) to this kernel tree.
+# Applies the embedded SUSFS v2.3.0-for-4.19 patch (susfs_patch_to_4.19.patch,
+# sourced from Hotsteel2901/NonGKI_Kernel_Build_OP8, based on
+# JackA1ltman/NonGKI_Kernel_Build_2nd's proven 4.19 adaptations) to this
+# kernel tree. This patch is self-contained and includes new files
+# fs/susfs.c, include/linux/susfs.h, include/linux/susfs_def.h, plus the
+# needed changes to fs/namei.c, fs/namespace.c, fs/notify/fdinfo.c,
+# fs/proc/base.c, fs/proc/cmdline.c, fs/proc/fd.c, fs/proc/task_mmu.c,
+# fs/proc_namespace.c, fs/readdir.c, fs/statfs.c, fs/super.c,
+# kernel/kallsyms.c, mm/memory.c, security/selinux/avc.c, fs/Makefile.
 #
-# NOTE: we deliberately do NOT apply kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch.
-# That patch targets vanilla KernelSU, which has no susfs awareness of its own.
-# NadekoSU already ships its own susfs inline-hook support (CONFIG_KSU_SUSFS and the
-# KSU_SUSFS_* options in kernel/Kconfig, plus kernel/tools/susfs_compat.mk), so applying
-# the vanilla KernelSU patch on top would duplicate/conflict with that.
+# It does NOT touch include/linux/sched.h or include/linux/mount.h: this
+# susfs version doesn't use the ANDROID_KABI_RESERVE task_struct slot
+# trick that the old susfs4ksu kernel-4.19 branch (~v1.3.x) needed, so no
+# separate sched.h/mount.h fixup is required here.
+#
+# It also does NOT add the KSU syscall hooks (ksu_handle_setresuid etc) -
+# those are handled by this repo's own syscall_hook.sh, run as a separate
+# workflow step right before this one.
 
-SUSFS_BRANCH="kernel-4.19"
-SUSFS_REPO="https://gitlab.com/simonpunk/susfs4ksu.git"
-WORK="/tmp/susfs4ksu"
+PATCH_FILE=".github/scripts/susfs_patch_to_4.19.patch"
 REJECT_DIR="susfs-rejects"
 
-echo "Cloning susfs4ksu (${SUSFS_BRANCH})..."
-rm -rf "$WORK"
-git clone -b "$SUSFS_BRANCH" --depth=1 "$SUSFS_REPO" "$WORK"
-
-PATCH_FILE=$(find "$WORK/kernel_patches" -maxdepth 1 -name "50_add_susfs_in_kernel-4.19*.patch" | head -n1)
-if [ -z "$PATCH_FILE" ]; then
-  echo "Could not find 50_add_susfs_in_kernel-4.19*.patch in $SUSFS_BRANCH, listing kernel_patches/:"
-  ls -la "$WORK/kernel_patches"
+if [ ! -f "$PATCH_FILE" ]; then
+  echo "Missing $PATCH_FILE - was it committed to the repo?"
   exit 1
 fi
-echo "Using patch: $PATCH_FILE"
-
-echo "Copying fs/susfs.c..."
-cp "$WORK/kernel_patches/fs/susfs.c" fs/susfs.c
-
-echo "Copying include/linux/susfs*.h..."
-cp "$WORK/kernel_patches/include/linux/susfs.h" include/linux/susfs.h
-[ -f "$WORK/kernel_patches/include/linux/susfs_def.h" ] && \
-  cp "$WORK/kernel_patches/include/linux/susfs_def.h" include/linux/susfs_def.h
 
 echo "Applying $PATCH_FILE..."
 set +e
@@ -44,160 +37,13 @@ echo "$PATCH_LOG"
 rm -rf "$REJECT_DIR"
 mkdir -p "$REJECT_DIR"
 
-# fs/overlayfs hunks that fail as "Reversed (or previously applied) patch detected"
-# mean this kernel already has the equivalent susfs-compatible overlayfs changes
-# (inherited from the Jujutsu-kernel base). That's not a real failure - drop those
-# rejects instead of treating them as something to fix.
 for rej in $(find . -path "./$REJECT_DIR" -prune -o -name "*.rej" -print 2>/dev/null); do
   src="${rej#./}"
   src="${src%.rej}"
-  if [[ "$src" == fs/overlayfs/* ]] && grep -q "Reversed (or previously applied)" <<< "$PATCH_LOG"; then
-    echo "Dropping $rej (overlayfs already has this change, see note above)"
-    rm -f "$rej"
-  else
-    mkdir -p "$REJECT_DIR/$(dirname "$src")"
-    cp "$rej" "$REJECT_DIR/$src.rej"
-    cp "$src" "$REJECT_DIR/$src.current" 2>/dev/null || true
-  fi
+  mkdir -p "$REJECT_DIR/$(dirname "$src")"
+  cp "$rej" "$REJECT_DIR/$src.rej"
+  cp "$src" "$REJECT_DIR/$src.current" 2>/dev/null || true
 done
-
-# --- Manual fixups ---
-# These two hunks fail because this kernel's layout differs from the stock
-# susfs4ksu kernel-4.19 assumptions (verified against the actual .rej content):
-#
-# 1. include/linux/sched.h: this kernel uses a single flat
-#    ANDROID_KABI_RESERVE(1..8) block near randomized_struct_fields_end
-#    (slot 1 already used for `frozen:1`), not the dual THREAD_INFO_IN_TASK
-#    branches next to futex_exit_mutex that the stock patch assumes.
-#    Fix: use slots 6 and 8 in that flat block for susfs_task_state /
-#    susfs_last_fake_mnt_id.
-#
-# 2. fs/namespace.c: alloc_vfsmnt() here already carries the
-#    should_spoof/custom_mnt_id signature (NadekoSU's own SUS_MOUNT support),
-#    and vfs_kern_mount() on this kernel has been refactored to go through
-#    the fs_context API (fc_mount()) rather than calling alloc_vfsmnt(name)
-#    directly - that call now lives in vfs_create_mount() as
-#    alloc_vfsmnt(fc->source ?: "none"). clone_mnt()'s call matches the
-#    stock patch content as-is, just at a different line offset.
-set +e
-python3 << 'PYEOF'
-import pathlib
-
-def fix(path, old, new, label):
-    p = pathlib.Path(path)
-    text = p.read_text()
-    count = text.count(old)
-    if count == 1:
-        p.write_text(text.replace(old, new, 1))
-        print(f"[fixup] applied: {label}")
-        return True
-    else:
-        print(f"[fixup] SKIPPED ({count} matches, expected 1): {label}")
-        return False
-
-sched_ok = fix(
-    "include/linux/sched.h",
-    "\tANDROID_KABI_RESERVE(2);\n"
-    "\tANDROID_KABI_RESERVE(3);\n"
-    "\tANDROID_KABI_RESERVE(4);\n"
-    "\tANDROID_KABI_RESERVE(5);\n"
-    "\tANDROID_KABI_RESERVE(6);\n"
-    "\tANDROID_KABI_RESERVE(7);\n"
-    "\tANDROID_KABI_RESERVE(8);\n",
-    "\tANDROID_KABI_RESERVE(2);\n"
-    "\tANDROID_KABI_RESERVE(3);\n"
-    "\tANDROID_KABI_RESERVE(4);\n"
-    "\tANDROID_KABI_RESERVE(5);\n"
-    "#ifdef CONFIG_KSU_SUSFS\n"
-    "\tANDROID_KABI_USE(6, u64 susfs_task_state);\n"
-    "#else\n"
-    "\tANDROID_KABI_RESERVE(6);\n"
-    "#endif\n"
-    "\tANDROID_KABI_RESERVE(7);\n"
-    "#ifdef CONFIG_KSU_SUSFS\n"
-    "\tANDROID_KABI_USE(8, u64 susfs_last_fake_mnt_id);\n"
-    "#else\n"
-    "\tANDROID_KABI_RESERVE(8);\n"
-    "#endif\n",
-    "sched.h task_struct kabi slots 6/8 -> susfs fields",
-)
-
-ns_create_ok = fix(
-    "fs/namespace.c",
-    '\tmnt = alloc_vfsmnt(fc->source ?: "none");\n'
-    "\tif (!mnt)\n"
-    "\t\treturn ERR_PTR(-ENOMEM);\n",
-    "#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n"
-    "\tif (unlikely(susfs_is_current_ksu_domain())) {\n"
-    '\t\tmnt = alloc_vfsmnt(fc->source ?: "none", true, 0);\n'
-    "\t} else {\n"
-    '\t\tmnt = alloc_vfsmnt(fc->source ?: "none", false, 0);\n'
-    "\t}\n"
-    "#else\n"
-    '\tmnt = alloc_vfsmnt(fc->source ?: "none");\n'
-    "#endif\n"
-    "\tif (!mnt)\n"
-    "\t\treturn ERR_PTR(-ENOMEM);\n",
-    "namespace.c vfs_create_mount() -> spoofed mnt_id for KSU",
-)
-
-ns_clone_ok = fix(
-    "fs/namespace.c",
-    "\tmnt = alloc_vfsmnt(old->mnt_devname);\n"
-    "\tif (!mnt)\n"
-    "\t\treturn ERR_PTR(-ENOMEM);\n",
-    "#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n"
-    "\t{\n"
-    "\tbool is_current_ksu_domain = susfs_is_current_ksu_domain();\n"
-    "\tbool is_current_zygote_domain = susfs_is_current_zygote_domain();\n"
-    "\n"
-    "\tif (unlikely(is_current_ksu_domain)) {\n"
-    "\t\tif (!(flag & CL_COPY_MNT_NS)) {\n"
-    "\t\t\tmnt = alloc_vfsmnt(old->mnt_devname, true, 0);\n"
-    "\t\t} else {\n"
-    "\t\t\tmnt = alloc_vfsmnt(old->mnt_devname, true, old->mnt_id);\n"
-    "\t\t\tif (mnt)\n"
-    "\t\t\t\tmnt->mnt.susfs_mnt_id_backup = DEFAULT_SUS_MNT_ID_FOR_KSU_PROC_UNSHARE;\n"
-    "\t\t}\n"
-    "\t} else if (likely(is_current_zygote_domain) && (old->mnt_id >= DEFAULT_SUS_MNT_ID)) {\n"
-    "\t\tmnt = alloc_vfsmnt(old->mnt_devname, true, 0);\n"
-    "\t} else if ((flag & CL_COPY_MNT_NS) && (old->mnt_id >= DEFAULT_SUS_MNT_ID)) {\n"
-    "\t\tmnt = alloc_vfsmnt(old->mnt_devname, true, 0);\n"
-    "\t} else {\n"
-    "\t\tmnt = alloc_vfsmnt(old->mnt_devname, false, 0);\n"
-    "\t}\n"
-    "\t}\n"
-    "#else\n"
-    "\tmnt = alloc_vfsmnt(old->mnt_devname);\n"
-    "#endif\n"
-    "\tif (!mnt)\n"
-    "\t\treturn ERR_PTR(-ENOMEM);\n",
-    "namespace.c clone_mnt() -> spoofed mnt_id for KSU/zygote",
-)
-
-# NOTE: ksu_handle_setresuid (kernel/sys.c), ksu_handle_sys_read
-# (fs/read_write.c) and ksu_handle_input_handle_event
-# (drivers/input/input.c) - required by inline_hook_check.mk - are NOT
-# added here. They're handled by the repo's own syscall_hook.sh, run as
-# a separate workflow step right after "Integrate NadekoSU", which
-# detects the correct hook style (static_key vs bool) by inspecting the
-# actual drivers/kernelsu/ sources instead of guessing.
-
-import sys
-if not (sched_ok and ns_create_ok and ns_clone_ok):
-    sys.exit(1)
-PYEOF
-FIXUP_STATUS=$?
-set -e
-
-if [ "$FIXUP_STATUS" -eq 0 ]; then
-  rm -f include/linux/sched.h.rej fs/namespace.c.rej
-  rm -f "$REJECT_DIR/include/linux/sched.h.rej" "$REJECT_DIR/include/linux/sched.h.current"
-  rm -f "$REJECT_DIR/fs/namespace.c.rej" "$REJECT_DIR/fs/namespace.c.current"
-  echo "[fixup] sched.h and namespace.c manual fixups applied successfully."
-else
-  echo "[fixup] one or more manual fixups did not match - leaving .rej files for manual review."
-fi
 
 REMAINING=$(find . -path "./$REJECT_DIR" -prune -o -name "*.rej" -print 2>/dev/null)
 if [ -n "$REMAINING" ]; then
@@ -206,126 +52,12 @@ if [ -n "$REMAINING" ]; then
   echo "Rejected hunks (copied to $REJECT_DIR/ for upload):"
   echo "$REMAINING"
   echo ""
-  echo "This kernel has mediatek/jujutsu-specific changes in files susfs also touches."
-  echo "Each .rej needs to be resolved by hand against the current file, then re-applied."
+  echo "This patch was generated against a LineageOS/Qualcomm (OnePlus 8)"
+  echo "4.19 base, not this MTK/dandelion tree, so some hunks touching"
+  echo "vendor-specific code may not match. Each .rej needs manual review"
+  echo "against the current file."
   exit 1
 fi
 
 rmdir "$REJECT_DIR" 2>/dev/null || true
-echo "susfs4ksu kernel patch applied cleanly (overlayfs hunks already present, skipped)."
-
-# --- Command-ID gap between this susfs.c (kernel-4.19 branch, ~v1.3.x) and
-# NadekoSU's drivers/kernelsu/supercall/dispatch.c (built against a newer
-# susfs API) ---
-# dispatch.c references 4 commands this susfs.c predates:
-#   CMD_SUSFS_ADD_SUS_PATH_LOOP, CMD_SUSFS_HIDE_SUS_MNTS_FOR_NON_SU_PROCS,
-#   CMD_SUSFS_ADD_SUS_MAP, CMD_SUSFS_ENABLE_AVC_LOG_SPOOFING
-# The numeric IDs below are taken verbatim from NadekoSU's own userspace
-# (userspace/ksud/src/android/susfs/api/magic.rs) - not guessed.
-# sus_path_loop shares susfs_add_sus_path's exact arg struct, so it's wired
-# to the real, already-working handler. The other 3 (sus_map, hide-mounts-
-# for-non-su-procs, avc-log-spoofing) are genuinely newer susfs features
-# with no implementation to crib from in this branch - they're wired as
-# accepted no-op toggles (compile + respond success, but don't do anything)
-# rather than guessing at real VFS/AVC hooking kernel code.
-cat >> include/linux/susfs_def.h << 'EOF'
-
-#ifndef CMD_SUSFS_ADD_SUS_PATH_LOOP
-#define CMD_SUSFS_ADD_SUS_PATH_LOOP 0x55553
-#endif
-#ifndef CMD_SUSFS_HIDE_SUS_MNTS_FOR_NON_SU_PROCS
-#define CMD_SUSFS_HIDE_SUS_MNTS_FOR_NON_SU_PROCS 0x55561
-#endif
-#ifndef CMD_SUSFS_ENABLE_AVC_LOG_SPOOFING
-#define CMD_SUSFS_ENABLE_AVC_LOG_SPOOFING 0x60010
-#endif
-#ifndef CMD_SUSFS_ADD_SUS_MAP
-#define CMD_SUSFS_ADD_SUS_MAP 0x60020
-#endif
-#ifndef SUSFS_MAGIC
-#define SUSFS_MAGIC 0xFAFAFAFA
-#endif
-
-int susfs_add_sus_path_loop(void __user *arg);
-int susfs_set_hide_sus_mnts_for_non_su_procs(void __user *arg);
-int susfs_add_sus_map(void __user *arg);
-int susfs_set_avc_log_spoofing(void __user *arg);
-EOF
-
-cat >> fs/susfs.c << 'EOF'
-
-/*
- * ---------------------------------------------------------------------
- * Compat shims for commands dispatch.c expects that this susfs.c
- * (kernel-4.19 branch, ~v1.3.x) predates. See include/linux/susfs_def.h
- * for the command IDs and note above in susfs_setup.sh for details.
- * ---------------------------------------------------------------------
- */
-
-/* susfs_add_sus_path is already defined earlier in this file (fs/susfs.c)
- * as: int susfs_add_sus_path(struct st_susfs_sus_path* __user user_info).
- * No extern re-declaration here - the real one is already visible in this
- * translation unit by this point, and a mismatched extern just conflicts
- * with it (confirmed by build: expected a struct st_susfs_sus_path* type,
- * not a generic void __user *). */
-
-int susfs_add_sus_path_loop(void __user *arg)
-{
-	/* Identical arg layout to CMD_SUSFS_ADD_SUS_PATH; reuse the real,
-	 * already-working handler instead of a stub. */
-	return susfs_add_sus_path((struct st_susfs_sus_path __user *)arg);
-}
-
-struct st_susfs_toggle_compat {
-	bool enabled;
-	int err;
-};
-
-int susfs_set_hide_sus_mnts_for_non_su_procs(void __user *arg)
-{
-	struct st_susfs_toggle_compat info;
-
-	if (copy_from_user(&info, arg, sizeof(info)))
-		return -EFAULT;
-	/* STUB: not implemented in this susfs backport - accepted as a
-	 * no-op so userspace doesn't see ERR_CMD_NOT_SUPPORTED. */
-	info.err = 0;
-	if (copy_to_user(arg, &info, sizeof(info)))
-		return -EFAULT;
-	return 0;
-}
-
-int susfs_set_avc_log_spoofing(void __user *arg)
-{
-	struct st_susfs_toggle_compat info;
-
-	if (copy_from_user(&info, arg, sizeof(info)))
-		return -EFAULT;
-	/* STUB: not implemented in this susfs backport. */
-	info.err = 0;
-	if (copy_to_user(arg, &info, sizeof(info)))
-		return -EFAULT;
-	return 0;
-}
-
-int susfs_add_sus_map(void __user *arg)
-{
-	/* 256 = SUSFS_MAX_LEN_PATHNAME per NadekoSU's userspace
-	 * (userspace/ksud/src/android/susfs/api/magic.rs) - hardcoded here
-	 * rather than relying on a macro name that may not exist in this
-	 * older susfs.h. */
-	struct st_susfs_sus_map_compat {
-		char target_pathname[256];
-		int err;
-	} info;
-
-	if (copy_from_user(&info, arg, sizeof(info)))
-		return -EFAULT;
-	/* STUB: not implemented in this susfs backport. */
-	info.err = 0;
-	if (copy_to_user(arg, &info, sizeof(info)))
-		return -EFAULT;
-	return 0;
-}
-EOF
-echo "[compat] added susfs command-ID compat shims (sus_path_loop real, 3 others stubbed)"
+echo "susfs v2.3.0-for-4.19 patch applied cleanly."
