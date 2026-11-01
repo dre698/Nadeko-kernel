@@ -242,6 +242,9 @@ cat >> include/linux/susfs_def.h << 'EOF'
 #ifndef CMD_SUSFS_ADD_SUS_MAP
 #define CMD_SUSFS_ADD_SUS_MAP 0x60020
 #endif
+#ifndef SUSFS_MAGIC
+#define SUSFS_MAGIC 0xFAFAFAFA
+#endif
 
 int susfs_add_sus_path_loop(void __user *arg);
 int susfs_set_hide_sus_mnts_for_non_su_procs(void __user *arg);
@@ -259,18 +262,18 @@ cat >> fs/susfs.c << 'EOF'
  * ---------------------------------------------------------------------
  */
 
-/* susfs_add_sus_path's real declaration lives wherever this file already
- * declares it (varies by susfs.c version); declare it locally here too
- * rather than in the shared header, to avoid a conflicting re-declaration
- * if the existing one differs slightly. A matching extern for an already-
- * declared function is harmless in C. */
-extern int susfs_add_sus_path(void __user *arg);
+/* susfs_add_sus_path is already defined earlier in this file (fs/susfs.c)
+ * as: int susfs_add_sus_path(struct st_susfs_sus_path* __user user_info).
+ * No extern re-declaration here - the real one is already visible in this
+ * translation unit by this point, and a mismatched extern just conflicts
+ * with it (confirmed by build: expected a struct st_susfs_sus_path* type,
+ * not a generic void __user *). */
 
 int susfs_add_sus_path_loop(void __user *arg)
 {
 	/* Identical arg layout to CMD_SUSFS_ADD_SUS_PATH; reuse the real,
 	 * already-working handler instead of a stub. */
-	return susfs_add_sus_path(arg);
+	return susfs_add_sus_path((struct st_susfs_sus_path __user *)arg);
 }
 
 struct st_susfs_toggle_compat {
