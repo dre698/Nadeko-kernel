@@ -57,7 +57,7 @@ CONFIG_NR_CPUS=8
 # CONFIG_ARM64_SVE is not set
 CONFIG_RANDOMIZE_BASE=y
 # CONFIG_RANDOMIZE_MODULE_REGION_FULL is not set
-CONFIG_CMDLINE="ramoops_memreserve=4M console=ttyGS0,115200"
+CONFIG_CMDLINE="ramoops_memreserve=4M console=ttyGS0,115200 ignore_loglevel log_buf_len=4M initcall_debug"
 CONFIG_CMDLINE_EXTEND=y
 # CONFIG_EFI is not set
 CONFIG_BUILD_ARM64_APPENDED_DTB_IMAGE_NAMES="mediatek/mt6765"
