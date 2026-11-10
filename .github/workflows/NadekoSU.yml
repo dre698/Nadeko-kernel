@@ -5,10 +5,19 @@ name: Build Nadeko Kernel With NadekoSU
 
 on:
   workflow_dispatch:
+    inputs:
+      defconfig:
+        description: "Kernel defconfig to build"
+        required: false
+        default: "blossom_defconfig"
+        type: choice
+        options:
+          - blossom_defconfig
+          - blossom_test_defconfig
 
 env:
   TZ: "Asia/Jakarta"
-  KERNEL_DEFCONFIG: "blossom_defconfig"
+  KERNEL_DEFCONFIG: ${{ github.event.inputs.defconfig || 'blossom_defconfig' }}
   KERNEL_ARCH: "arm64"
   KBUILD_BUILD_USER: "Telegram"
   KBUILD_BUILD_HOST: "dre698"
