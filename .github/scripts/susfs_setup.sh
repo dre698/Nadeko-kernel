@@ -296,7 +296,42 @@ ok_k = remove("security/selinux/selinuxfs.c",
 	"#endif // #ifdef CONFIG_KSU_SUSFS\n",
 	"selinuxfs.c handle_sel_write_access wrapper")
 
-if not (ok_a and ok_b and ok_c and ok_d and ok_e and ok_f and ok_g and ok_h and ok_i and ok_j and ok_k):
+# --- selinuxfs.c: fake_status hook in sel_open_handle_status ---
+# NadekoSU does NOT export fake_status / fake_status_initialize_key /
+# initialize_fake_status / ksu_selinux_hide_running, so any leftover
+# reference from the patch fails at link time (undefined reference).
+ok_l = remove("security/selinux/selinuxfs.c",
+	"#ifdef CONFIG_KSU_SUSFS\n"
+	"extern struct page *fake_status;\n"
+	"extern struct static_key_false fake_status_initialize_key;\n"
+	"extern bool ksu_selinux_hide_running __read_mostly;\n"
+	"extern bool ksu_selinux_hide_enabled __read_mostly;\n"
+	"extern void initialize_fake_status(void);\n"
+	"#endif // #ifdef CONFIG_KSU_SUSFS\n\n",
+	"selinuxfs.c fake_status externs")
+
+ok_m = remove("security/selinux/selinuxfs.c",
+	"#ifdef CONFIG_KSU_SUSFS\n"
+	"\tif (likely(current_uid().val >= 10000 && ksu_selinux_hide_running)) {\n"
+	"\t\tvoid *data = fake_status;\n"
+	"\t\tif (data) {\n"
+	"\t\t\tfilp->private_data = data;\n"
+	"\t\t\treturn 0;\n"
+	"\t\t}\n"
+	"\t}\n"
+	"#endif // #ifdef CONFIG_KSU_SUSFS\n\n",
+	"selinuxfs.c sel_open_handle_status fake_status early return")
+
+ok_n = remove("security/selinux/selinuxfs.c",
+	"#ifdef CONFIG_KSU_SUSFS\n"
+	"\tif (static_branch_unlikely(&fake_status_initialize_key)) {\n"
+	"\t\tif (!fake_status)\n"
+	"\t\t\tinitialize_fake_status();\n"
+	"\t}\n"
+	"#endif // #ifdef CONFIG_KSU_SUSFS\n",
+	"selinuxfs.c sel_open_handle_status initialize_fake_status")
+
+if not (ok_a and ok_b and ok_c and ok_d and ok_e and ok_f and ok_g and ok_h and ok_i and ok_j and ok_k and ok_l and ok_m and ok_n):
     sys.exit(1)
 PYEOF
 FIXUP_STATUS=$?
