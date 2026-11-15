@@ -109,6 +109,17 @@ set +e
 python3 << 'PYEOF'
 import pathlib, sys
 
+def remove(path, old, label, expect=1):
+    p = pathlib.Path(path)
+    text = p.read_text()
+    count = text.count(old)
+    if count != expect:
+        print(f"[fixup] SKIPPED {label} ({count} matches, expected {expect})")
+        return False
+    p.write_text(text.replace(old, "", expect if expect > 1 else 1))
+    print(f"[fixup] removed {label}")
+    return True
+
 p = pathlib.Path("fs/proc/task_mmu.c")
 text = p.read_text()
 old = (
@@ -166,7 +177,126 @@ if count2 == 1:
 else:
     print(f"[fixup] SKIPPED namei.c may_create ({count2} matches, expected 1) - leaving as-is")
 
-if not (ok_a and ok_b):
+# --- Manual fixup: security/selinux/hooks.c + selinuxfs.c selinux_hide ---
+# The patch wires its own selinux_hide feature via wrapper functions
+# (handle_selinux_setprocattr, handle_sel_write_context,
+# handle_sel_write_access) that call through to my_setprocattr/
+# my_write_context/my_write_access - but those 3 are declared `static`
+# (file-local) in NadekoSU's own kernel/feature/selinux_hide.c, not
+# externally callable. NadekoSU already implements selinux_hide
+# independently via runtime binary patching (ksu_patch_text() overwriting
+# the LSM hook table's function pointers directly), which doesn't need or
+# use this patch's source-level wrapper mechanism at all. The other
+# related externs (ksu_selinux_hide_running/_enabled,
+# fake_status_initialize_key, initialize_fake_status) ARE exported by
+# selinux_hide.c and stay untouched - only the 3 wrapper call sites and
+# their now-dead extern/function bodies are reverted to the plain
+# original SELinux functions.
+ok_c = remove("security/selinux/hooks.c",
+	"#ifdef CONFIG_KSU_SUSFS\n"
+	"extern bool ksu_selinux_hide_running __read_mostly;\n"
+	"extern int my_setprocattr(const char *name, void *value, size_t size);\n"
+	"#endif // #ifdef CONFIG_KSU_SUSFS\n\n",
+	"hooks.c selinux_hide externs")
+
+ok_d = remove("security/selinux/hooks.c",
+	"#ifdef CONFIG_KSU_SUSFS\n"
+	"static int handle_selinux_setprocattr(const char *name, void *value, size_t size)\n"
+	"{\n"
+	"\tif ((likely(!strcmp(name, \"current\") &&\n"
+	"\t\t\t\tcurrent_uid().val >= 10000 &&\n"
+	"\t\t\t\tksu_selinux_hide_running)))\n"
+	"\t\treturn my_setprocattr(name, value, size);\n"
+	"\treturn selinux_setprocattr(name, value, size);\n"
+	"}\n"
+	"#endif // #ifdef CONFIG_KSU_SUSFS\n\n",
+	"hooks.c handle_selinux_setprocattr wrapper")
+
+p_hooks = pathlib.Path("security/selinux/hooks.c")
+text_hooks = p_hooks.read_text()
+old_e = (
+	"#ifdef CONFIG_KSU_SUSFS\n"
+	"\tLSM_HOOK_INIT(setprocattr, handle_selinux_setprocattr),\n"
+	"#else\n"
+	"\tLSM_HOOK_INIT(setprocattr, selinux_setprocattr),\n"
+	"#endif // #ifdef CONFIG_KSU_SUSFS\n"
+)
+new_e = "\tLSM_HOOK_INIT(setprocattr, selinux_setprocattr),\n"
+ok_e = text_hooks.count(old_e) == 1
+if ok_e:
+    p_hooks.write_text(text_hooks.replace(old_e, new_e, 1))
+    print("[fixup] hooks.c LSM_HOOK_INIT(setprocattr) reverted to original")
+else:
+    print(f"[fixup] SKIPPED hooks.c LSM_HOOK_INIT ({text_hooks.count(old_e)} matches, expected 1)")
+
+ok_f = remove("security/selinux/selinuxfs.c",
+	"extern ssize_t my_write_context(struct file *file, char *buf, size_t size);\n"
+	"extern ssize_t my_write_access(struct file *file, char *buf, size_t size);\n",
+	"selinuxfs.c my_write_context/my_write_access externs")
+
+ok_g = remove("security/selinux/selinuxfs.c",
+	"#ifdef CONFIG_KSU_SUSFS\n"
+	"static ssize_t handle_sel_write_access(struct file *file, char *buf, size_t size);\n"
+	"#endif // #ifdef CONFIG_KSU_SUSFS\n",
+	"selinuxfs.c handle_sel_write_access forward declaration")
+
+p_sfs = pathlib.Path("security/selinux/selinuxfs.c")
+text_sfs = p_sfs.read_text()
+old_h = (
+	"#ifdef CONFIG_KSU_SUSFS\n"
+	"\t[SEL_ACCESS] = handle_sel_write_access,\n"
+	"#else\n"
+	"\t[SEL_ACCESS] = sel_write_access,\n"
+	"#endif // #ifdef CONFIG_KSU_SUSFS\n"
+)
+new_h = "\t[SEL_ACCESS] = sel_write_access,\n"
+ok_h = text_sfs.count(old_h) == 1
+if ok_h:
+    text_sfs = text_sfs.replace(old_h, new_h, 1)
+    p_sfs.write_text(text_sfs)
+    print("[fixup] selinuxfs.c write_op[SEL_ACCESS] reverted to original")
+else:
+    print(f"[fixup] SKIPPED selinuxfs.c SEL_ACCESS ({text_sfs.count(old_h)} matches, expected 1)")
+
+text_sfs = p_sfs.read_text()
+old_i = (
+	"#ifdef CONFIG_KSU_SUSFS\n"
+	"\t[SEL_CONTEXT] = handle_sel_write_context,\n"
+	"#else\n"
+	"\t[SEL_CONTEXT] = sel_write_context,\n"
+	"#endif // #ifdef CONFIG_KSU_SUSFS\n"
+)
+new_i = "\t[SEL_CONTEXT] = sel_write_context,\n"
+ok_i = text_sfs.count(old_i) == 1
+if ok_i:
+    text_sfs = text_sfs.replace(old_i, new_i, 1)
+    p_sfs.write_text(text_sfs)
+    print("[fixup] selinuxfs.c write_op[SEL_CONTEXT] reverted to original")
+else:
+    print(f"[fixup] SKIPPED selinuxfs.c SEL_CONTEXT ({text_sfs.count(old_i)} matches, expected 1)")
+
+ok_j = remove("security/selinux/selinuxfs.c",
+	"#ifdef CONFIG_KSU_SUSFS\n"
+	"static ssize_t handle_sel_write_context(struct file *file, char *buf, size_t size) {\n"
+	"\tif ((likely(current_uid().val >= 10000 && ksu_selinux_hide_running)))\n"
+	"\t\treturn my_write_context(file, buf, size);\n"
+	"\treturn sel_write_context(file, buf, size);\n"
+	"}\n"
+	"#endif // #ifdef CONFIG_KSU_SUSFS\n",
+	"selinuxfs.c handle_sel_write_context wrapper")
+
+ok_k = remove("security/selinux/selinuxfs.c",
+	"#ifdef CONFIG_KSU_SUSFS\n"
+	"static ssize_t handle_sel_write_access(struct file *file, char *buf, size_t size)\n"
+	"{\n"
+	"\tif ((likely(current_uid().val >= 10000 && ksu_selinux_hide_running)))\n"
+	"\t\treturn my_write_access(file, buf, size);\n"
+	"\treturn sel_write_access(file, buf, size);\n"
+	"}\n"
+	"#endif // #ifdef CONFIG_KSU_SUSFS\n",
+	"selinuxfs.c handle_sel_write_access wrapper")
+
+if not (ok_a and ok_b and ok_c and ok_d and ok_e and ok_f and ok_g and ok_h and ok_i and ok_j and ok_k):
     sys.exit(1)
 PYEOF
 FIXUP_STATUS=$?
