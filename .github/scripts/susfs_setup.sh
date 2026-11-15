@@ -2,12 +2,11 @@
 set -eu
 
 # Applies the embedded SUSFS patch (susfs_patch_to_4.19.patch), generated
-# by diffing BakaSU's own kernel_xiaomi_sm6225-Kuroha-BakaSU vs
-# kernel_xiaomi_sm6225-Kuroha-BakaSU-SUSFS (same upstream lineage as
-# NadekoSU - BakaSU is ReSukiSU's current name). This is BakaSU's own
-# reference susfs integration, not a third-party non-GKI backport, so it
-# matches NadekoSU's driver API (CMD_SUSFS_*, SUSFS_MAGIC, all handler
-# functions) exactly - no compat shims needed.
+# by diffing a reference KSU fork's own kernel source before/after its
+# susfs integration (same upstream lineage as NadekoSU). This is that
+# fork's own reference susfs integration, not a third-party non-GKI
+# backport, so it matches NadekoSU's driver API (CMD_SUSFS_*, SUSFS_MAGIC,
+# all handler functions) exactly - no compat shims needed.
 #
 # It includes the hook insertions (fs/exec.c, fs/open.c, fs/stat.c,
 # kernel/sys.c, kernel/reboot.c, drivers/input/input.c,
@@ -23,6 +22,80 @@ if [ ! -f "$PATCH_FILE" ]; then
   exit 1
 fi
 
+# --- Pre-cleanup: old CONFIG_KSU-gated manual hooks that would otherwise
+# collide with the ones this patch adds to the same files ---
+# fs/stat.c's existing hook is gated on CONFIG_KSU_MANUAL_HOOK specifically,
+# so it self-disables once the defconfig switches to CONFIG_KSU_SUSFS - no
+# cleanup needed there. fs/open.c, fs/exec.c and kernel/reboot.c gate on
+# plain CONFIG_KSU (always on), so their old hook declarations/calls would
+# otherwise conflict (duplicate/mismatched signature) with this patch's own
+# ksu_handle_faccessat / ksu_handle_execveat / ksu_handle_sys_reboot hooks.
+# Verified against this tree's actual file content before writing this.
+set +e
+python3 << 'PYEOF'
+import pathlib, sys
+
+def remove(path, old, label, expect=1):
+    p = pathlib.Path(path)
+    text = p.read_text()
+    count = text.count(old)
+    if count != expect:
+        print(f"[precleanup] SKIPPED {label} ({count} matches, expected {expect})")
+        return False
+    p.write_text(text.replace(old, "", expect if expect > 1 else 1))
+    print(f"[precleanup] removed {label}")
+    return True
+
+ok1 = remove("fs/open.c",
+	"#ifdef CONFIG_KSU\n"
+	"extern __attribute__((hot)) int ksu_handle_faccessat(int *dfd,\n"
+	"\t\tconst char __user **filename_user, int *mode, int *flags);\n"
+	"#endif\n\n",
+	"fs/open.c old faccessat extern declaration")
+
+ok2 = remove("fs/open.c",
+	"\n#ifdef CONFIG_KSU\n"
+	"\tksu_handle_faccessat(&dfd, &filename, &mode, NULL);\n"
+	"#endif\n",
+	"fs/open.c old faccessat call")
+
+ok3 = remove("fs/exec.c",
+	"#ifdef CONFIG_KSU\n"
+	"__attribute__((hot))\n"
+	"extern int ksu_handle_execveat(int *fd, struct filename **filename_ptr,\n"
+	"\t\t\tvoid *argv, void *envp, int *flags);\n"
+	"#endif\n\n",
+	"fs/exec.c old execveat extern declaration")
+
+ok4 = remove("fs/exec.c",
+	"#ifdef CONFIG_KSU\n"
+	"\tksu_handle_execveat((int *)AT_FDCWD, &filename, &argv, &envp, 0);\n"
+	"#endif\n",
+	"fs/exec.c old execveat calls (both call sites)",
+	expect=2)
+
+ok5 = remove("kernel/reboot.c",
+	"#ifdef CONFIG_KSU\n"
+	"extern int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd, void __user **arg);\n"
+	"#endif\n\n",
+	"kernel/reboot.c old sys_reboot extern declaration")
+
+ok6 = remove("kernel/reboot.c",
+	"\n#ifdef CONFIG_KSU\n"
+	"\tksu_handle_sys_reboot(magic1, magic2, cmd, &arg);\n"
+	"#endif\n",
+	"kernel/reboot.c old sys_reboot call")
+
+if not (ok1 and ok2 and ok3 and ok4 and ok5 and ok6):
+    sys.exit(1)
+PYEOF
+PRECLEAN_STATUS=$?
+set -e
+if [ "$PRECLEAN_STATUS" -ne 0 ]; then
+  echo "Pre-cleanup of old manual hooks did not match expected content - stopping before the main patch, since applying it now would likely produce a conflicting-declaration build error instead of a clean .rej."
+  exit 1
+fi
+
 echo "Applying $PATCH_FILE..."
 set +e
 PATCH_LOG=$(patch -p1 --fuzz=3 --no-backup-if-mismatch < "$PATCH_FILE" 2>&1)
@@ -32,10 +105,10 @@ echo "$PATCH_LOG"
 # --- Manual fixup: fs/proc/task_mmu.c ---
 # This kernel's pagemap_read() calls the OLDER 3-arg
 # walk_page_range(start_vaddr, end, &pagemap_walk), not the 5-arg
-# walk_page_range(mm, start_vaddr, end, &pagemap_ops, &pm) the Kuroha
-# (sm6225) source assumes. Verified by direct comparison against this
-# tree's actual fs/proc/task_mmu.c - adapts the same SUS_MAP bypass
-# logic to the older call signature instead of guessing.
+# walk_page_range(mm, start_vaddr, end, &pagemap_ops, &pm) this patch's
+# source tree assumes. Verified by direct comparison against this tree's
+# actual fs/proc/task_mmu.c - adapts the same SUS_MAP bypass logic to the
+# older call signature instead of guessing.
 set +e
 python3 << 'PYEOF'
 import pathlib, sys
@@ -112,4 +185,4 @@ if [ -n "$REMAINING" ]; then
 fi
 
 rmdir "$REJECT_DIR" 2>/dev/null || true
-echo "BakaSU susfs patch applied cleanly."
+echo "susfs patch applied cleanly."
