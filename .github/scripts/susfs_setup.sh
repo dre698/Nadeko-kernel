@@ -26,10 +26,21 @@ fi
 # collide with the ones this patch adds to the same files ---
 # fs/stat.c's existing hook is gated on CONFIG_KSU_MANUAL_HOOK specifically,
 # so it self-disables once the defconfig switches to CONFIG_KSU_SUSFS - no
-# cleanup needed there. fs/open.c, fs/exec.c and kernel/reboot.c gate on
-# plain CONFIG_KSU (always on), so their old hook declarations/calls would
+# cleanup needed there. fs/open.c and kernel/reboot.c gate on plain
+# CONFIG_KSU (always on), so their old hook declarations/calls would
 # otherwise conflict (duplicate/mismatched signature) with this patch's own
-# ksu_handle_faccessat / ksu_handle_execveat / ksu_handle_sys_reboot hooks.
+# ksu_handle_faccessat / ksu_handle_sys_reboot hooks.
+#
+# fs/exec.c is deliberately left untouched and its fs/exec.c hunks removed
+# from the embedded patch entirely: this kernel's __do_execve_file()/
+# do_execveat() control flow has diverged structurally from the patch's
+# source tree (no CONFIG_KSU_MANUAL_HOOK wrapping around those functions
+# to begin with), so the patch's #elif-based insertions can't apply
+# safely here - they'd land via fuzzy offset matching and leave dangling
+# #elif blocks with no matching #if. The existing plain
+# `#ifdef CONFIG_KSU` execveat hook in fs/exec.c is left in place and
+# keeps working as it always has; only the SUSFS-specific "sucompat via
+# exec" enhancement is unavailable, not core SUS_PATH/SUS_MOUNT/etc.
 # Verified against this tree's actual file content before writing this.
 set +e
 python3 << 'PYEOF'
@@ -59,21 +70,6 @@ ok2 = remove("fs/open.c",
 	"#endif\n",
 	"fs/open.c old faccessat call")
 
-ok3 = remove("fs/exec.c",
-	"#ifdef CONFIG_KSU\n"
-	"__attribute__((hot))\n"
-	"extern int ksu_handle_execveat(int *fd, struct filename **filename_ptr,\n"
-	"\t\t\tvoid *argv, void *envp, int *flags);\n"
-	"#endif\n\n",
-	"fs/exec.c old execveat extern declaration")
-
-ok4 = remove("fs/exec.c",
-	"#ifdef CONFIG_KSU\n"
-	"\tksu_handle_execveat((int *)AT_FDCWD, &filename, &argv, &envp, 0);\n"
-	"#endif\n",
-	"fs/exec.c old execveat calls (both call sites)",
-	expect=2)
-
 ok5 = remove("kernel/reboot.c",
 	"#ifdef CONFIG_KSU\n"
 	"extern int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd, void __user **arg);\n"
@@ -86,7 +82,7 @@ ok6 = remove("kernel/reboot.c",
 	"#endif\n",
 	"kernel/reboot.c old sys_reboot call")
 
-if not (ok1 and ok2 and ok3 and ok4 and ok5 and ok6):
+if not (ok1 and ok2 and ok5 and ok6):
     sys.exit(1)
 PYEOF
 PRECLEAN_STATUS=$?
