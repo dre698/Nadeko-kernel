@@ -137,11 +137,36 @@ new = (
 	"\t\tmmap_read_unlock(mm);\n"
 )
 count = text.count(old)
+ok_a = False
 if count == 1:
     p.write_text(text.replace(old, new, 1))
     print("[fixup] task_mmu.c pagemap_read SUS_MAP bypass applied")
+    ok_a = True
 else:
     print(f"[fixup] SKIPPED task_mmu.c ({count} matches, expected 1) - leaving .rej for manual review")
+
+# --- Manual fixup: fs/namei.c may_create() ---
+# The patch's SUS_PATH hunk calls inode_permission2(mnt, dir, ...), a
+# vendor permission-check variant that doesn't exist anywhere in this
+# kernel, with `mnt` not in scope in may_create() (it only takes dir and
+# child). Verified: this same function already calls the standard
+# inode_permission(dir, mask) a few lines below for its normal path, so
+# that's the correct, already-available call to use here too - not a
+# guess at new permission logic, just using this kernel's existing API.
+p2 = pathlib.Path("fs/namei.c")
+text2 = p2.read_text()
+old2 = "int error = inode_permission2(mnt, dir, MAY_WRITE | MAY_EXEC);"
+new2 = "int error = inode_permission(dir, MAY_WRITE | MAY_EXEC);"
+count2 = text2.count(old2)
+ok_b = False
+if count2 == 1:
+    p2.write_text(text2.replace(old2, new2, 1))
+    print("[fixup] namei.c may_create() inode_permission2 -> inode_permission applied")
+    ok_b = True
+else:
+    print(f"[fixup] SKIPPED namei.c may_create ({count2} matches, expected 1) - leaving as-is")
+
+if not (ok_a and ok_b):
     sys.exit(1)
 PYEOF
 FIXUP_STATUS=$?
