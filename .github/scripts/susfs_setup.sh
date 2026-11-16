@@ -331,7 +331,39 @@ ok_n = remove("security/selinux/selinuxfs.c",
 	"#endif // #ifdef CONFIG_KSU_SUSFS\n",
 	"selinuxfs.c sel_open_handle_status initialize_fake_status")
 
-if not (ok_a and ok_b and ok_c and ok_d and ok_e and ok_f and ok_g and ok_h and ok_i and ok_j and ok_k and ok_l and ok_m and ok_n):
+# --- kernel/sys.c: spoof_uname hook landed AFTER copy_to_user in newuname ---
+# The hook edits tmp after it was already copied to userspace, so it never
+# takes effect. Move it to before up_read()/copy_to_user().
+_sys = pathlib.Path("kernel/sys.c")
+_t = _sys.read_text()
+_hook = (
+	"#ifdef CONFIG_KSU_SUSFS_SPOOF_UNAME\n"
+	"\tif (static_branch_likely(&susfs_is_uname_spoof_buffer_set))\n"
+	"\t\tsusfs_spoof_uname(&tmp);\n"
+	"#endif\n"
+)
+_bad = (
+	"\tup_read(&uts_sem);\n"
+	"\tif (copy_to_user(name, &tmp, sizeof(tmp)))\n"
+	"\t\treturn -EFAULT;\n\n" + _hook
+)
+_good = _hook + (
+	"\tup_read(&uts_sem);\n"
+	"\tif (copy_to_user(name, &tmp, sizeof(tmp)))\n"
+	"\t\treturn -EFAULT;\n\n"
+)
+if _t.count(_bad) == 1:
+    _sys.write_text(_t.replace(_bad, _good))
+    print("[fixup] moved spoof_uname hook before copy_to_user in newuname")
+    ok_o = True
+elif _t.count(_good) == 1:
+    print("[fixup] spoof_uname hook already before copy_to_user")
+    ok_o = True
+else:
+    print("[fixup] SKIPPED newuname spoof hook reorder")
+    ok_o = False
+
+if not (ok_a and ok_b and ok_c and ok_d and ok_e and ok_f and ok_g and ok_h and ok_i and ok_j and ok_k and ok_l and ok_m and ok_n and ok_o):
     sys.exit(1)
 PYEOF
 FIXUP_STATUS=$?
