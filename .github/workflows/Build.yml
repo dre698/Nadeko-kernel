@@ -465,9 +465,6 @@ jobs:
           esc() { sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
 
           COMPILER_VER=$(${CLANG_DIR:-/tmp/clang}/bin/clang --version 2>/dev/null | head -1 | sed -E 's/ *\([^)]*\)//g; s/ version / /' | esc || true)
-          BRANCH="${GITHUB_REF_NAME}"
-          SHORT_SHA="${GITHUB_SHA:0:9}"
-          COMMIT_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA}"
           RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
 
           if [ "$KSU" = "nadekosu" ]; then
@@ -485,8 +482,7 @@ jobs:
             B_SEC=$((${{ env.B_TIME }} % 60))
             CAPTION="<b>Nadeko Kernel</b> | ${TITLE}"$'\n'
             [ -n "$FEATURES" ] && CAPTION+="<b>Features:</b> ${FEATURES}"$'\n'
-            CAPTION+=$'\n'"<b>Kernel:</b> <code>$(echo "$KERNEL_VER" | esc)</code>"$'\n'
-            CAPTION+="<b>Commit:</b> <a href=\"${COMMIT_URL}\">${SHORT_SHA}</a> (${BRANCH})"$'\n'
+            CAPTION+=$'\n'"<b>Kernel:</b> $(echo "$KERNEL_VER" | esc)"$'\n'
             CAPTION+="<b>Compiler:</b> ${COMPILER_VER}"$'\n'
             CAPTION+="<b>Build time:</b> ${B_MIN}m ${B_SEC}s"$'\n'
             CAPTION+="<b>MD5:</b> <code>${{ env.Z_MD5 }}</code>"
@@ -498,8 +494,7 @@ jobs:
           else
             CAPTION="<b>Nadeko Kernel</b> | ${TITLE}"$'\n'
             [ -n "$FEATURES" ] && CAPTION+="<b>Features:</b> ${FEATURES}"$'\n'
-            CAPTION+=$'\n'"<b>Build failed.</b> <a href=\"${RUN_URL}\">View run</a>"$'\n'
-            CAPTION+="<b>Commit:</b> <a href=\"${COMMIT_URL}\">${SHORT_SHA}</a> (${BRANCH})"
+            CAPTION+=$'\n'"<b>Build failed.</b> <a href=\"${RUN_URL}\">View run</a>"
             if [ -f build.log ]; then
               curl -s -F chat_id="$GROUP_CHAT_ID" $THREAD_ARG \
                 -F document=@build.log \
