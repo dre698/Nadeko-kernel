@@ -215,6 +215,17 @@ sub("fs/readdir.c",
     "struct getdents_callback64 {\n    struct dir_context ctx;\n#ifdef CONFIG_KSU_SUSFS_SUS_PATH\n\tstruct super_block *sb;\n#endif\n    struct linux_dirent64 __user * current_dir;",
     "readdir getdents_callback64 sb field")
 
+# fs/namei.c + fs/internal.h: this base keeps filename_lookup() static, while the patched open.c/stat.c
+# (ksu faccessat / vfs_statx hooks) call it from outside namei.c (link error: undefined symbol filename_lookup).
+sub("fs/namei.c",
+    "static int filename_lookup(int dfd, struct filename *name, unsigned flags,\n\t\t\t   struct path *path, struct path *root)\n{",
+    "int filename_lookup(int dfd, struct filename *name, unsigned flags,\n\t\t    struct path *path, struct path *root)\n{",
+    "namei filename_lookup non-static")
+sub("fs/internal.h",
+    "extern int user_path_mountpoint_at(int, const char __user *, unsigned int, struct path *);",
+    "extern int filename_lookup(int dfd, struct filename *name, unsigned flags,\n\t\t\t   struct path *path, struct path *root);\nextern int user_path_mountpoint_at(int, const char __user *, unsigned int, struct path *);",
+    "internal.h filename_lookup declaration")
+
 # the old base's pagemap_read is already handled above, so drop the stale rejects it leaves behind
 for rej in ("fs/proc/task_mmu.c.rej", "fs/readdir.c.rej", "fs/statfs.c.rej", "fs/namespace.c.rej", "fs/notify/fdinfo.c.rej", "fs/proc/fd.c.rej"):
     pathlib.Path(rej).unlink(missing_ok=True)
