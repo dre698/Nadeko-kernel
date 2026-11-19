@@ -163,6 +163,58 @@ sub("kernel/sys.c", "SYSCALL_DEFINE1(newuname, struct new_utsname __user *, name
     "SYSCALL_DEFINE1(newuname, struct new_utsname __user *, name)\n{\n\tstruct new_utsname tmp;\n\n\tdown_read(&uts_sem);\n\tmemcpy(&tmp, utsname(), sizeof(tmp));\n" + HOOK + "\tup_read(&uts_sem);",
     "sys.c newuname spoof_uname hook before up_read")
 
+# fs/proc/fd.c: the patch's seq_show hunk uses tab-indented context, but this base is space-indented, so with
+# fuzz it lands INSIDE the original seq_printf() argument list (compile error "expected expression").
+# Replace the broken region with the intended code.
+FMT = '"pos:\\t%lli\\nflags:\\t0%o\\nmnt_id:\\t%i\\n"'
+sub("fs/proc/fd.c",
+    "    seq_printf(m, " + FMT + ",\n           (long long)file->f_pos, f_flags,\n"
+    "\t/* Keep file descriptor presentation consistent with SUSFS mount IDs. */\n"
+    "#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n"
+    "\tif (likely(susfs_is_current_proc_umounted())) {\n"
+    "\t\tstruct mount *mnt = real_mount(file->f_path.mnt);\n"
+    "\t\tseq_printf(m, " + FMT + ",\n"
+    "\t\t\t   (long long)file->f_pos, f_flags,\n"
+    "\t\t\t   susfs_get_non_sus_mnt_id_from_mnt(mnt));\n"
+    "\t} else\n"
+    "#endif\n"
+    "           real_mount(file->f_path.mnt)->mnt_id);\n",
+    "\t/* Keep file descriptor presentation consistent with SUSFS mount IDs. */\n"
+    "#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n"
+    "\tif (likely(susfs_is_current_proc_umounted())) {\n"
+    "\t\tstruct mount *mnt = real_mount(file->f_path.mnt);\n"
+    "\t\tseq_printf(m, " + FMT + ",\n"
+    "\t\t\t   (long long)file->f_pos, f_flags,\n"
+    "\t\t\t   susfs_get_non_sus_mnt_id_from_mnt(mnt));\n"
+    "\t} else\n"
+    "#endif\n"
+    "\tseq_printf(m, " + FMT + ",\n"
+    "\t\t   (long long)file->f_pos, f_flags,\n"
+    "\t\t   real_mount(file->f_path.mnt)->mnt_id);\n",
+    "fd.c seq_show mnt_id block")
+
+# fs/namespace.c: the patch's early return for KSU-unshared mounts must come BEFORE ida_free(),
+# otherwise the id is freed anyway and the check does nothing.
+sub("fs/namespace.c",
+    "static void mnt_free_id(struct mount *mnt)\n{\n\n\tida_free(&mnt_id_ida, mnt->mnt_id);\n"
+    "#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n"
+    "\tif (unlikely(mnt->mnt.mnt_flags & VFSMOUNT_MNT_FLAGS_KSU_UNSHARED_MNT))\n"
+    "\t\treturn;\n\n"
+    "#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n}\n",
+    "static void mnt_free_id(struct mount *mnt)\n{\n"
+    "#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n"
+    "\tif (unlikely(mnt->mnt.mnt_flags & VFSMOUNT_MNT_FLAGS_KSU_UNSHARED_MNT))\n"
+    "\t\treturn;\n"
+    "#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n"
+    "\tida_free(&mnt_id_ida, mnt->mnt_id);\n}\n",
+    "namespace mnt_free_id order")
+
+# fs/readdir.c: getdents_callback64 needs the sb field (this hunk was rejected on this base)
+sub("fs/readdir.c",
+    "struct getdents_callback64 {\n    struct dir_context ctx;\n    struct linux_dirent64 __user * current_dir;",
+    "struct getdents_callback64 {\n    struct dir_context ctx;\n#ifdef CONFIG_KSU_SUSFS_SUS_PATH\n\tstruct super_block *sb;\n#endif\n    struct linux_dirent64 __user * current_dir;",
+    "readdir getdents_callback64 sb field")
+
 # the old base's pagemap_read is already handled above, so drop the stale rejects it leaves behind
 for rej in ("fs/proc/task_mmu.c.rej", "fs/readdir.c.rej", "fs/statfs.c.rej", "fs/namespace.c.rej", "fs/notify/fdinfo.c.rej", "fs/proc/fd.c.rej"):
     pathlib.Path(rej).unlink(missing_ok=True)
