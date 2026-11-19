@@ -482,7 +482,7 @@ jobs:
             B_SEC=$((${{ env.B_TIME }} % 60))
             CAPTION="<b>Nadeko Kernel</b> | ${TITLE}"$'\n'
             [ -n "$FEATURES" ] && CAPTION+="<b>Features:</b> ${FEATURES}"$'\n'
-            CAPTION+=$'\n'"<b>Kernel:</b> $(echo "$KERNEL_VER" | esc)"$'\n'
+            CAPTION+=$'\n'"<b>Kernel:</b> ${KERNEL_VER%%-*}"$'\n'
             CAPTION+="<b>Compiler:</b> ${COMPILER_VER}"$'\n'
             CAPTION+="<b>Build time:</b> ${B_MIN}m ${B_SEC}s"$'\n'
             CAPTION+="<b>MD5:</b> <code>${{ env.Z_MD5 }}</code>"
