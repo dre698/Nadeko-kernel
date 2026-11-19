@@ -492,7 +492,7 @@ jobs:
             CAPTION+="<b>MD5:</b> <code>${{ env.Z_MD5 }}</code>"
             curl -s -F chat_id="$GROUP_CHAT_ID" $THREAD_ARG \
               -F document=@${{ env.ARTIFACT_NAME }}.zip \
-              -F caption="$CAPTION" \
+              --form-string caption="$CAPTION" \
               -F parse_mode=HTML \
               "https://api.telegram.org/bot${BOT_TOKEN}/sendDocument"
           else
@@ -503,12 +503,12 @@ jobs:
             if [ -f build.log ]; then
               curl -s -F chat_id="$GROUP_CHAT_ID" $THREAD_ARG \
                 -F document=@build.log \
-                -F caption="$CAPTION" \
+                --form-string caption="$CAPTION" \
                 -F parse_mode=HTML \
                 "https://api.telegram.org/bot${BOT_TOKEN}/sendDocument"
             else
               curl -s -F chat_id="$GROUP_CHAT_ID" $THREAD_ARG \
-                -F text="$CAPTION" \
+                --form-string text="$CAPTION" \
                 -F parse_mode=HTML \
                 "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage"
             fi
