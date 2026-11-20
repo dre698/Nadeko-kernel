@@ -1,11 +1,11 @@
 # MTK Kernel Build - unified workflow, tick any variants and they all build in parallel
 #
-#   vanilla            : no KSU (blossom_noksu_defconfig, shattered-Clang-15)
+#   vanilla            : no KSU (blossom_noksu_defconfig)
 #   nadekosu           : NadekoSU
 #   nadekosu_oc        : NadekoSU + overclock (L cluster 2501MHz)
 #   nadekosu_susfs     : NadekoSU + SUSFS
 #   nadekosu_susfs_oc  : NadekoSU + SUSFS + overclock
-#   toolchain          : auto = shattered-Clang-15 for vanilla, crdroid Clang for the rest
+#   toolchain          : crdroid Clang for all variants
 
 name: Build Nadeko Kernel
 
@@ -37,15 +37,6 @@ on:
         required: false
         default: false
         type: boolean
-      toolchain:
-        description: "Toolchain (auto = shattered for vanilla, crdroid for the rest)"
-        required: false
-        default: "auto"
-        type: choice
-        options:
-          - auto
-          - crdroid-clang
-          - shattered-clang-15
       prebuilts:
         description: "Also upload prebuilt artifacts (kernel, dtb, modules, headers)"
         required: false
@@ -112,16 +103,11 @@ jobs:
           KSU="${{ matrix.ksu }}"
           SUSFS="${{ matrix.susfs }}"
           OC="${{ matrix.oc }}"
-          TOOLCHAIN="${{ inputs.toolchain }}"
 
           if [ "$KSU" = "none" ]; then
             DEFCONFIG="blossom_noksu_defconfig"
           else
             DEFCONFIG="blossom_defconfig"
-          fi
-
-          if [ "$TOOLCHAIN" = "auto" ]; then
-            if [ "$KSU" = "none" ]; then TOOLCHAIN="shattered-clang-15"; else TOOLCHAIN="crdroid-clang"; fi
           fi
 
           # fail early on combinations that can't build, instead of after 20 minutes
@@ -143,12 +129,11 @@ jobs:
             echo "SUSFS=$SUSFS"
             echo "OC=$OC"
             echo "KERNEL_DEFCONFIG=$DEFCONFIG"
-            echo "TOOLCHAIN=$TOOLCHAIN"
             echo "VARIANT_TAGS=$TAGS"
             echo "KERNEL_STRING=$KSTRING"
           } >> $GITHUB_ENV
 
-          echo "ksu=$KSU susfs=$SUSFS oc=$OC defconfig=$DEFCONFIG toolchain=$TOOLCHAIN"
+          echo "ksu=$KSU susfs=$SUSFS oc=$OC defconfig=$DEFCONFIG"
 
       - name: Install dependencies
         run: |
@@ -164,13 +149,11 @@ jobs:
 
       # ---------- toolchain: crdroid Clang + LineageOS GCC ----------
       - name: Clone crdroid Clang
-        if: env.TOOLCHAIN == 'crdroid-clang'
         run: |
           echo "Cloning crdroid Clang..."
           git clone --depth=1 https://gitlab.com/crdroidandroid/android_prebuilts_clang_host_linux-x86_clang-r428724.git /tmp/clang
 
       - name: Clone LineageOS GCC toolchains
-        if: env.TOOLCHAIN == 'crdroid-clang'
         run: |
           echo "Cloning GCC ARM64..."
           GIT_SSL_NO_VERIFY=1 git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9.git /tmp/gcc-aarch64
@@ -178,40 +161,12 @@ jobs:
           echo "Cloning GCC ARM32..."
           GIT_SSL_NO_VERIFY=1 git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9.git /tmp/gcc-arm
 
-      - name: Verify crdroid toolchains
-        if: env.TOOLCHAIN == 'crdroid-clang'
+      - name: Verify toolchains
         run: |
           echo "CLANG_DIR=/tmp/clang" >> $GITHUB_ENV
           /tmp/clang/bin/clang --version
           /tmp/gcc-aarch64/bin/aarch64-linux-android-gcc --version
           /tmp/gcc-arm/bin/arm-linux-androideabi-gcc --version
-
-      # ---------- toolchain: shattered-Clang-15 + LLD ----------
-      - name: Download shattered-Clang-15
-        if: env.TOOLCHAIN == 'shattered-clang-15'
-        run: |
-          sudo apt-get install -y gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
-          mkdir -p /tmp/shattered
-          curl -Lo /tmp/shattered.tar.gz \
-            "https://github.com/erabye/shattered-clang/releases/download/shattered-Clang-15.0.7/shattered-Clang-15.0.7.tar.gz"
-          tar -zxf /tmp/shattered.tar.gz -C /tmp/shattered
-
-      - name: Verify shattered toolchain
-        if: env.TOOLCHAIN == 'shattered-clang-15'
-        run: |
-          echo "CLANG_DIR=/tmp/shattered" >> $GITHUB_ENV
-          export PATH="/tmp/shattered/bin:/usr/bin:${PATH}"
-          for tool in clang ld.lld llvm-nm llvm-ar llvm-objcopy llvm-objdump llvm-readelf llvm-strip; do
-            if ! command -v "$tool" >/dev/null; then
-              echo "✗ $tool not found in /tmp/shattered/bin"
-              ls -lah /tmp/shattered/bin
-              exit 1
-            fi
-          done
-          clang --version
-          ld.lld --version
-          aarch64-linux-gnu-gcc --version
-          arm-linux-gnueabi-gcc --version
 
       # ---------- KSU: NadekoSU ----------
       - name: Clean stale KernelSU placeholder
@@ -289,25 +244,12 @@ jobs:
           set -o pipefail
           START_TIME=$(date +%s)
 
-          if [ "$TOOLCHAIN" = "shattered-clang-15" ]; then
-            export PATH="/tmp/shattered/bin:/usr/bin:${PATH}"
-            MAKE_ARGS="O=out ARCH=${KERNEL_ARCH} SUBARCH=${KERNEL_ARCH} \
-              CC=clang LD=ld.lld NM=llvm-nm AR=llvm-ar STRIP=llvm-strip \
-              OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump READELF=llvm-readelf \
-              LLVM_IAS=1 HOSTCC=clang HOSTCXX=clang++ HOSTLD=ld.lld HOSTAR=llvm-ar \
-              CROSS_COMPILE=aarch64-linux-gnu- \
-              CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
-              CROSS_COMPILE_COMPAT=arm-linux-gnueabi-"
-            make ${MAKE_ARGS} ${KERNEL_DEFCONFIG}
-            make ${MAKE_ARGS} olddefconfig
-          else
-            export PATH="/tmp/clang/bin:/tmp/gcc-aarch64/bin:/tmp/gcc-arm/bin:${PATH}"
-            MAKE_ARGS="O=out ARCH=${KERNEL_ARCH} CC=clang \
-              CLANG_TRIPLE=aarch64-linux-gnu- \
-              CROSS_COMPILE=aarch64-linux-android- \
-              CROSS_COMPILE_ARM32=arm-linux-androideabi-"
-            make ${MAKE_ARGS} ${KERNEL_DEFCONFIG}
-          fi
+          export PATH="/tmp/clang/bin:/tmp/gcc-aarch64/bin:/tmp/gcc-arm/bin:${PATH}"
+          MAKE_ARGS="O=out ARCH=${KERNEL_ARCH} CC=clang \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            CROSS_COMPILE=aarch64-linux-android- \
+            CROSS_COMPILE_ARM32=arm-linux-androideabi-"
+          make ${MAKE_ARGS} ${KERNEL_DEFCONFIG}
 
           echo "Building kernel (ksu=${KSU} susfs=${SUSFS} oc=${OC})..."
           make -j$(nproc) ${MAKE_ARGS} 2>&1 | tee build.log
